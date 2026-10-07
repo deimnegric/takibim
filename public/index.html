@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Giriş Çıkış Takip</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1f3a5f">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="logo">✓</div>
+    <div><h1>Giriş Çıkış Takip</h1><small id="clock"></small></div>
+  </div>
+  <div class="actions" id="hdrActions"></div>
+</header>
+
+<main>
+  <section id="viewDash">
+    <div class="bar">
+      <label class="datebox">Tarih <input type="date" id="selDate"></label>
+      <button class="btn small light" id="btnToday">Bugün</button>
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <div class="card">
+      <h2 id="ttlWork">Bugün Çalışanlar</h2>
+      <div class="cols" id="listWork"></div>
+    </div>
+
+    <div class="card">
+      <h2>Giriş / Çıkış Durumu</h2>
+      <div class="legend">
+        <span><i class="dot ok"></i>Yapıldı</span>
+        <span><i class="dot bad"></i>Yapılmadı</span>
+        <span><i class="dot wait"></i>Zamanı gelmedi</span>
+      </div>
+      <div class="cols" id="listStatus"></div>
+    </div>
+  </section>
+
+  <section id="viewAdmin" hidden>
+    <nav class="tabs">
+      <button class="tab" data-tab="vardiya">Vardiya</button>
+      <button class="tab" data-tab="calisan">Çalışanlar</button>
+      <button class="tab" data-tab="yonetici">Yöneticiler</button>
+      <button class="tab" data-tab="ayar">Ayarlar</button>
+    </nav>
+    <div id="adminBody"></div>
+  </section>
+</main>
+
+<dialog id="dlgLogin">
+  <form method="dialog" id="frmLogin">
+    <h2>Yönetici Girişi</h2>
+    <label>Sicil No<input id="inSicil" inputmode="numeric" autocomplete="username" required></label>
+    <label>Şifre<input id="inPass" type="password" autocomplete="current-password" required></label>
+    <p class="err" id="loginErr"></p>
+    <div class="rowbtn">
+      <button type="button" class="btn light" id="btnLoginCancel">Vazgeç</button>
+      <button class="btn" id="btnLoginGo">Giriş</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
