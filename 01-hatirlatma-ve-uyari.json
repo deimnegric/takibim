@@ -1,0 +1,444 @@
+{
+  "name": "Giriş-Çıkış Hatırlatma ve Yönetici Uyarısı",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "name": "Her Dakika",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// >>> BURAYI DÜZENLEYİN <<<\nconst PROJECT = 'PROJE_ID';                       // Firebase proje kimliği\nconst SITE_URL = 'https://PROJE_ID.web.app';      // Sitenizin adresi (sonunda / olmasın)\nconst now = Date.now();\nconst f = (field, op, value) => ({ fieldFilter: { field: { fieldPath: field }, op, value } });\nconst body = { structuredQuery: { from: [{ collectionId: 'attendance' }], limit: 300,\n  where: { compositeFilter: { op: 'AND', filters: [\n    f('confirmed', 'EQUAL', { booleanValue: false }),\n    f('alertSent', 'EQUAL', { booleanValue: false }),\n    f('windowStart', 'LESS_THAN_OR_EQUAL', { integerValue: String(now) }),\n    f('windowStart', 'GREATER_THAN_OR_EQUAL', { integerValue: String(now - 12 * 3600e3) }) ] } } } };\nreturn [{ json: { project: PROJECT, siteUrl: SITE_URL, body } }];"
+      },
+      "name": "Sorgu Hazırla",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://firestore.googleapis.com/v1/projects/{{ $('Sorgu Hazırla').first().json.project }}/databases/(default)/documents:runQuery",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Sorgu Hazırla').first().json.body) }}"
+      },
+      "name": "Bekleyenler",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "",
+          "name": "Google Service Account (Firestore)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const dec = v => { if (!v) return null; if ('stringValue' in v) return v.stringValue; if ('integerValue' in v) return Number(v.integerValue);\n  if ('doubleValue' in v) return v.doubleValue; if ('booleanValue' in v) return v.booleanValue; return null; };\nconst docs = items => items.map(i => i.json.document).filter(Boolean).map(d => { const f = {}; for (const k in d.fields || {}) f[k] = dec(d.fields[k]); f._id = d.name.split('/').pop(); return f; });\nconst hm = ms => new Date(ms + 3 * 3600e3).toISOString().substr(11, 5);\nconst now = Date.now(); const out = [];\nfor (const d of docs($input.all())) {\n  if (d.windowEnd <= now) { out.push({ json: { action: 'alert', attId: d._id, sicil: d.sicil, ad: d.ad, type: d.type, planned: d.planned } }); continue; }\n  const step = (d.aralik || 5) * 60000;\n  const due = Math.floor((now - d.windowStart) / step) + 1;\n  if ((d.lastReminderAt || 0) < d.windowStart + (due - 1) * step) {\n    out.push({ json: { action: 'remind', attId: d._id, sicil: d.sicil, ad: d.ad, type: d.type, planned: d.planned,\n      windowStart: d.windowStart, windowEnd: d.windowEnd, reminders: (d.reminders || 0) + 1 } });\n  }\n}\nreturn out;"
+      },
+      "name": "Karar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "Hatırlatma-mı?",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "remind",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Hatırlatma mı?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://firestore.googleapis.com/v1/projects/{{ $('Sorgu Hazırla').first().json.project }}/databases/(default)/documents/employees/{{ $json.sicil }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {}
+      },
+      "name": "Çalışan Bilgisi",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        160
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "",
+          "name": "Google Service Account (Firestore)"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const dec = v => { if (!v) return null; if ('stringValue' in v) return v.stringValue; if ('integerValue' in v) return Number(v.integerValue);\n  if ('doubleValue' in v) return v.doubleValue; if ('booleanValue' in v) return v.booleanValue; return null; };\nconst docs = items => items.map(i => i.json.document).filter(Boolean).map(d => { const f = {}; for (const k in d.fields || {}) f[k] = dec(d.fields[k]); f._id = d.name.split('/').pop(); return f; });\nconst hm = ms => new Date(ms + 3 * 3600e3).toISOString().substr(11, 5);\nconst base = $('Karar').all(); const site = $('Sorgu Hazırla').first().json.siteUrl; const out = [];\n$input.all().forEach((it, i) => {\n  const a = base[i].json; const f = it.json.fields || {};\n  const chat = f.telegramChatId?.stringValue, token = f.token?.stringValue;\n  if (!chat || !token) return;\n  const tr = a.type === 'giris' ? 'girişinizi' : 'çıkışınızı';\n  const link = `${site}/onay.html?id=${encodeURIComponent(a.attId)}&t=${token}`;\n  const text = `⏰ ${a.ad}, lütfen kalbim ${tr} yapın.\\n\\nVardiya saatiniz: ${a.planned}\\nİşlem süresi: ${hm(a.windowStart)} – ${hm(a.windowEnd)}\\n\\nİşlemi yaptıysanız aşağıdaki butonla onaylayın:\\n${link}`;\n  out.push({ json: { chatId: chat, text, link, attId: a.attId, reminders: a.reminders } });\n});\nreturn out;"
+      },
+      "name": "Mesaj Hazırla",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ İşlemi yaptım, onayla",
+                    "additionalFields": {
+                      "url": "={{ $json.link }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram Hatırlat",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        160
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://firestore.googleapis.com/v1/projects/{{ $('Sorgu Hazırla').first().json.project }}/databases/(default)/documents/attendance/{{ $('Mesaj Hazırla').item.json.attId }}?updateMask.fieldPaths=reminders&updateMask.fieldPaths=lastReminderAt",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { reminders: { integerValue: String($('Mesaj Hazırla').item.json.reminders) }, lastReminderAt: { integerValue: String(Date.now()) } } }) }}"
+      },
+      "name": "Sayacı Güncelle",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        160
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "",
+          "name": "Google Service Account (Firestore)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { alerts: $input.all().map(i => i.json) } }];"
+      },
+      "name": "Alert Toplu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://firestore.googleapis.com/v1/projects/{{ $('Sorgu Hazırla').first().json.project }}/databases/(default)/documents:runQuery",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ structuredQuery: { from: [{ collectionId: 'employees' }], where: { compositeFilter: { op: 'AND', filters: [{ fieldFilter: { field: { fieldPath: 'isAdmin' }, op: 'EQUAL', value: { booleanValue: true } } },{ fieldFilter: { field: { fieldPath: 'notify' }, op: 'EQUAL', value: { booleanValue: true } } }] } } } }) }}"
+      },
+      "name": "Yöneticiler",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        440
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "",
+          "name": "Google Service Account (Firestore)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const dec = v => { if (!v) return null; if ('stringValue' in v) return v.stringValue; if ('integerValue' in v) return Number(v.integerValue);\n  if ('doubleValue' in v) return v.doubleValue; if ('booleanValue' in v) return v.booleanValue; return null; };\nconst docs = items => items.map(i => i.json.document).filter(Boolean).map(d => { const f = {}; for (const k in d.fields || {}) f[k] = dec(d.fields[k]); f._id = d.name.split('/').pop(); return f; });\nconst hm = ms => new Date(ms + 3 * 3600e3).toISOString().substr(11, 5);\nconst alerts = $('Alert Toplu').first().json.alerts;\nconst admins = docs($input.all()).filter(a => a.telegramChatId); const out = [];\nfor (const a of alerts) for (const adm of admins) {\n  const tr = a.type === 'giris' ? 'girişini' : 'çıkışını';\n  out.push({ json: { chatId: adm.telegramChatId, attId: a.attId,\n    text: `⚠️ ${a.ad} (${a.sicil}) ${a.planned} vardiyası için kalbim ${tr} yapmadı. Lütfen kontrol ediniz.` } });\n}\nreturn out;"
+      },
+      "name": "Alert Mesajları",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Telegram Yönetici",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1540,
+        440
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://firestore.googleapis.com/v1/projects/{{ $('Sorgu Hazırla').first().json.project }}/databases/(default)/documents/attendance/{{ $('Alert Mesajları').item.json.attId }}?updateMask.fieldPaths=alertSent&updateMask.fieldPaths=alertAt",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { alertSent: { booleanValue: true }, alertAt: { integerValue: String(Date.now()) } } }) }}"
+      },
+      "name": "Alert İşaretle",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        440
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "",
+          "name": "Google Service Account (Firestore)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Her Dakika": {
+      "main": [
+        [
+          {
+            "node": "Sorgu Hazırla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sorgu Hazırla": {
+      "main": [
+        [
+          {
+            "node": "Bekleyenler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bekleyenler": {
+      "main": [
+        [
+          {
+            "node": "Karar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Karar": {
+      "main": [
+        [
+          {
+            "node": "Hatırlatma mı?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hatırlatma mı?": {
+      "main": [
+        [
+          {
+            "node": "Çalışan Bilgisi",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert Toplu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Çalışan Bilgisi": {
+      "main": [
+        [
+          {
+            "node": "Mesaj Hazırla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mesaj Hazırla": {
+      "main": [
+        [
+          {
+            "node": "Telegram Hatırlat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Hatırlat": {
+      "main": [
+        [
+          {
+            "node": "Sayacı Güncelle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Toplu": {
+      "main": [
+        [
+          {
+            "node": "Yöneticiler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Yöneticiler": {
+      "main": [
+        [
+          {
+            "node": "Alert Mesajları",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Mesajları": {
+      "main": [
+        [
+          {
+            "node": "Telegram Yönetici",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Yönetici": {
+      "main": [
+        [
+          {
+            "node": "Alert İşaretle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Istanbul"
+  }
+}
