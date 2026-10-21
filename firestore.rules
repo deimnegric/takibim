@@ -34,6 +34,18 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // Giriş ekranı için: yalnızca {ad} içerir (telefon/token yok). Tek tek okunabilir, listelenemez.
+    match /roster/{sicil} {
+      allow get: if true;
+      allow list, write: if isAdmin();
+    }
+
+    // Herkese görünen haftalık vardiya görseli (belge kimliği = haftanın Pazartesi tarihi)
+    match /shiftImages/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     match /settings/{id} {
       allow read, write: if isAdmin();
     }

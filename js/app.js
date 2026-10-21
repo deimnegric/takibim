@@ -1,6 +1,6 @@
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getFirestore, collection, doc, query, where, onSnapshot, getDocs, getDoc, setDoc, updateDoc, deleteDoc,
-  writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+  writeBatch, serverTimestamp, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { firebaseConfig } from "./firebase-config.js";
@@ -26,6 +26,13 @@ const DEF = { girisOnce: 14, girisSonra: 15, cikisOnce: 15, cikisSonra: 15, aral
 let S = { ...DEF };
 let rows = [], employees = [], me = null, selDate = todayStr();
 let unsubRows = null, unsubEmp = null, adminTab = 'vardiya', parsed = null;
+let staff = null, mine = [], weekDoc = null, adminOpen = false, curToday = todayStr(), rosterCache = null, ocrFile = null;
+let unsubMine = null, weekSeq = 0;
+const ready = { staff: false, auth: false };
+const authorized = () => !!(me || staff);
+const mySicil = () => me?.sicil || staff?.sicil || null;
+const mondayOf = s => { const d = new Date(s + 'T00:00:00Z'), w = (d.getUTCDay() + 6) % 7; d.setUTCDate(d.getUTCDate() - w); return d.toISOString().slice(0, 10); };
+const addDays = (s, n) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
@@ -36,7 +43,11 @@ function toast(msg) {
 function tick() {
   $('#clock').textContent = new Intl.DateTimeFormat('tr-TR', { timeZone: TZ, dateStyle: 'full', timeStyle: 'short' }).format(new Date());
 }
-setInterval(() => { tick(); renderDash(); }, 30000); tick();
+setInterval(() => {
+  tick();
+  if (authorized() && todayStr() !== curToday) { if (selDate === curToday) { selDate = todayStr(); $('#selDate').value = selDate; } startData(); }
+  renderDash(); renderHello();
+}, 30000); tick();
 
 /* ---------- Pano ---------- */
 function watchRows() {
@@ -44,7 +55,45 @@ function watchRows() {
   unsubRows = onSnapshot(query(collection(db, 'attendance'), where('date', '==', selDate)),
     snap => { rows = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderDash(); },
     err => toast('Veri okunamadı: ' + err.message));
+  watchWeek();
 }
+async function watchWeek() {
+  const seq = ++weekSeq; weekDoc = null; renderWeek();
+  try { const d = await getDoc(doc(db, 'shiftImages', mondayOf(selDate))); if (seq === weekSeq) { weekDoc = d.exists() ? d.data() : null; renderWeek(); } }
+  catch { if (seq === weekSeq) renderWeek(); }
+}
+function watchMine() {
+  unsubMine?.(); unsubMine = null; mine = []; curToday = todayStr();
+  const sc = mySicil(); if (!sc) return renderHello();
+  unsubMine = onSnapshot(query(collection(db, 'attendance'), where('sicil', '==', sc), where('date', '==', curToday)),
+    snap => { mine = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderHello(); }, () => renderHello());
+}
+function startData() {
+  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubRows = unsubMine = null; rows = []; mine = []; weekDoc = null; return; }
+  watchRows(); watchMine();
+}
+
+function renderHello() {
+  const el = $('#hello'), sc = mySicil();
+  if (!sc) { el.hidden = true; return; }
+  const ad = me?.ad || staff?.ad || sc, g = mine.find(r => r.type === 'giris'), c = mine.find(r => r.type === 'cikis'), any = g || c;
+  const grp = any ? (any.group === 'aksam' ? 'aksam' : 'sabah') : '';
+  const ch = (r, l) => { if (!r) return ''; const st = stateOf(r); return `<span class="chip ${st}">${l} ${r.planned} ${st === 'ok' ? '✓ onaylandı' : st === 'bad' ? '! bekleniyor' : '· zamanı gelmedi'}</span>`; };
+  el.hidden = false;
+  el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz</small><h2>${esc(ad)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : ''}</div>` +
+    (any ? `<p class="hello-line">Bugünkü vardiyanız: <b>${g?.planned || '–'} – ${c?.planned || '–'}</b></p><div class="chips">${ch(g, 'Giriş')}${ch(c, 'Çıkış')}</div>`
+         : '<p class="hello-line muted">Bugün için vardiya kaydınız yok (izinli olabilirsiniz).</p>');
+}
+
+function renderWeek() {
+  const el = $('#cardWeek'), ws = mondayOf(selDate);
+  if (!weekDoc) { el.hidden = !me; el.innerHTML = me ? `<h2>Haftalık Vardiya</h2><p class="empty">Bu hafta için görsel yüklenmemiş (${fmtDate(ws)} haftası).</p>` : ''; return; }
+  el.hidden = false;
+  el.innerHTML = `<h2>Haftalık Vardiya <small>${fmtDate(ws).slice(0, 5)} – ${fmtDate(addDays(ws, 6)).slice(0, 5)}</small></h2>
+    <img class="weekimg" src="${weekDoc.data}" alt="Haftalık vardiya" width="${weekDoc.w || ''}" height="${weekDoc.h || ''}"><p class="hint">Büyütmek için görsele dokunun.</p>`;
+  el.querySelector('img').onclick = () => openImg(weekDoc.data);
+}
+function openImg(src) { $('#imgBig').src = src; $('#dlgImg').showModal(); }
 
 function people() {
   const m = new Map();
@@ -109,18 +158,56 @@ $('#selDate').onchange = e => { if (e.target.value) { selDate = e.target.value; 
 $('#btnToday').onclick = () => { selDate = todayStr(); $('#selDate').value = selDate; watchRows(); };
 
 /* ---------- Giriş / başlık ---------- */
+function applyView() {
+  const ok = authorized(), r = ready.staff && ready.auth;
+  $('#viewLogin').hidden = !r || ok;
+  $('#viewDash').hidden = !r || !ok || (!!me && adminOpen);
+  $('#viewAdmin').hidden = !r || !(me && adminOpen);
+  renderHeader(); renderDash(); renderHello(); renderWeek();
+  if (r && me && adminOpen) renderAdmin();
+}
 function renderHeader() {
   const h = $('#hdrActions');
+  if (!(ready.staff && ready.auth)) { h.innerHTML = ''; return; }
   h.innerHTML = me
-    ? `<button class="btn light small" id="btnView">${$('#viewAdmin').hidden ? 'Yönetim' : 'Pano'}</button><button class="btn light small" id="btnOut">Çıkış</button>`
+    ? `<button class="btn light small" id="btnView">${adminOpen ? 'Pano' : 'Yönetim'}</button><button class="btn light small" id="btnOut">Çıkış</button>`
+    : staff ? `<button class="btn light small" id="btnAdmin">Yönetici</button><button class="btn light small" id="btnOut">Çıkış</button>`
     : `<button class="btn light small" id="btnAdmin">Yönetici</button>`;
   $('#btnAdmin')?.addEventListener('click', () => { $('#loginErr').textContent = ''; $('#dlgLogin').showModal(); });
-  $('#btnOut')?.addEventListener('click', () => signOut(auth));
-  $('#btnView')?.addEventListener('click', () => { $('#viewAdmin').hidden = !$('#viewAdmin').hidden; $('#viewDash').hidden = !$('#viewAdmin').hidden; showView(); renderHeader(); });
+  $('#btnOut')?.addEventListener('click', logout);
+  $('#btnView')?.addEventListener('click', () => { adminOpen = !adminOpen; applyView(); });
 }
-function showView() {
-  if (!me) { $('#viewAdmin').hidden = true; $('#viewDash').hidden = false; return; }
-  if (!$('#viewAdmin').hidden) renderAdmin();
+async function logout() {
+  try { localStorage.removeItem('takip_staff'); } catch { }
+  staff = null; adminOpen = false;
+  if (auth.currentUser) await signOut(auth); else { startData(); applyView(); }
+}
+
+/* Çalışan girişi: yalnızca sicil, kayıtlı değilse giremez */
+$('#frmStaff').addEventListener('submit', async e => {
+  e.preventDefault();
+  const sc = cleanSicil($('#inStaff').value), err = $('#staffErr'); err.textContent = '';
+  if (!sc) return;
+  $('#btnStaffGo').disabled = true;
+  try {
+    const r = await getDoc(doc(db, 'roster', sc));
+    if (!r.exists()) { $('#inStaff').value = ''; err.textContent = 'Sicil bulunamadı.'; return; }
+    staff = { sicil: sc, ad: r.data().ad || sc };
+    try { localStorage.setItem('takip_staff', JSON.stringify(staff)); } catch { }
+    $('#inStaff').value = ''; startData(); applyView();
+  } catch { err.textContent = 'Bağlantı hatası, tekrar deneyin.'; }
+  finally { $('#btnStaffGo').disabled = false; }
+});
+async function restoreStaff() {
+  let c = null; try { c = JSON.parse(localStorage.getItem('takip_staff') || 'null'); } catch { }
+  if (c?.sicil) {
+    try {
+      const r = await getDoc(doc(db, 'roster', c.sicil));
+      if (r.exists()) staff = { sicil: c.sicil, ad: r.data().ad || c.ad };
+      else try { localStorage.removeItem('takip_staff'); } catch { }
+    } catch { staff = c; }      // çevrimdışı: kayıtlı oturumla devam
+  }
+  ready.staff = true; startData(); applyView();
 }
 
 $('#btnLoginCancel').onclick = () => $('#dlgLogin').close();
@@ -137,20 +224,34 @@ $('#frmLogin').addEventListener('submit', async e => {
 });
 
 onAuthStateChanged(auth, async u => {
-  me = null; unsubEmp?.(); employees = [];
+  me = null; unsubEmp?.(); employees = []; rosterCache = null;
   if (u) {
     const sicil = (u.email || '').split('@')[0];
     try {
-      const s = await getDoc(doc(db, 'employees', sicil));
-      if (s.exists() && s.data().isAdmin) {
-        me = { sicil, ...s.data() };
-        await loadSettings(); watchEmployees();
-        $('#viewAdmin').hidden = false; $('#viewDash').hidden = true;
+      const sn = await getDoc(doc(db, 'employees', sicil));
+      if (sn.exists() && sn.data().isAdmin) {
+        me = { sicil, ...sn.data() };
+        await loadSettings(); await loadRoster(); watchEmployees(); adminOpen = true;
       } else { await signOut(auth); toast('Bu hesap yönetici değil.'); return; }
     } catch (e) { await signOut(auth); toast('Yetki kontrolü başarısız.'); return; }
-  }
-  renderHeader(); renderDash(); showView();
+  } else adminOpen = false;
+  ready.auth = true; startData(); applyView();
 });
+
+/* roster: giriş ekranının okuyabildiği herkese açık, yalnızca {ad} içeren liste (telefon/token YOK) */
+async function loadRoster() {
+  rosterCache = new Map();
+  try { (await getDocs(collection(db, 'roster'))).forEach(d => rosterCache.set(d.id, d.data().ad)); } catch (e) { toast('Roster okunamadı: ' + e.message); }
+}
+async function syncRoster() {
+  if (!me || !rosterCache) return;
+  const bt = writeBatch(db); let n = 0; const want = new Map();
+  for (const e of employees) if (e.aktif !== false && e.ad) want.set(e.sicil, e.ad);
+  for (const [sc, ad] of want) if (rosterCache.get(sc) !== ad) { bt.set(doc(db, 'roster', sc), { ad }); n++; }
+  for (const sc of rosterCache.keys()) if (!want.has(sc)) { bt.delete(doc(db, 'roster', sc)); n++; }
+  if (!n) return;
+  try { await bt.commit(); rosterCache = new Map(want); } catch (e) { toast('Roster güncellenemedi: ' + e.message); }
+}
 
 async function loadSettings() {
   try { const s = await getDoc(doc(db, 'settings', 'main')); S = { ...DEF, ...(s.exists() ? s.data() : {}) }; } catch { S = { ...DEF }; }
@@ -158,7 +259,7 @@ async function loadSettings() {
 function watchEmployees() {
   unsubEmp = onSnapshot(collection(db, 'employees'), snap => {
     employees = snap.docs.map(d => ({ sicil: d.id, ...d.data() })).sort((a, b) => (a.ad || '').localeCompare(b.ad || '', 'tr'));
-    renderEmpList(); renderAdminList();
+    renderEmpList(); renderAdminList(); syncRoster();
   }, err => toast('Çalışanlar okunamadı: ' + err.message));
 }
 
@@ -303,6 +404,11 @@ function tabVardiya(b) {
     <p class="hint">Vardiya tablosunun ekran görüntüsünü seçin. Okunan değerler aşağıda <b>düzenlenebilir tablo</b> olarak gelir; kontrol edip kaydedin. Sarı = şüpheli, kırmızı = okunamadı/hatalı. Boş veya "B" = izinli.</p>
     <div class="rowbtn"><input type="file" id="fileImg" accept="image/*"></div>
     <div id="ocrOut"></div></div>
+  <div class="card"><h2>Vardiya Görselleri</h2>
+    <p class="hint">Yüklediğiniz görsel, tüm çalışanlara "Haftalık Vardiya" olarak görünür. OCR ile kaydettiğinizde görsel de otomatik yayınlanır. Aynı haftaya yeniden yüklerseniz eskisinin yerine geçer.</p>
+    <div class="form"><label>Hafta başlangıcı (Pazartesi)<input type="date" id="imgWeek" value="${mondayOf(selDate)}"></label>
+      <label>Görsel<input type="file" id="imgFile" accept="image/*"></label><button class="btn" id="btnImgPub">Yayınla</button></div>
+    <div id="imgList" class="imglist"></div></div>
   <div class="card"><h2>Seçili gün: ${fmtDate(selDate)}</h2>
     <div class="rowbtn"><button class="btn" id="btnExp">Excel'e aktar</button><button class="btn danger" id="btnDelDay">Bu günün vardiyasını sil</button></div></div>`;
 
@@ -336,6 +442,14 @@ function tabVardiya(b) {
     } catch (err) { $('#prev').innerHTML = `<p class="err">${esc(err.message)}</p>`; }
   };
   $('#fileImg').onchange = e => { const f = e.target.files[0]; if (f) runOcr(f); };
+  $('#btnImgPub').onclick = async ev => {
+    const f = $('#imgFile').files[0], w = $('#imgWeek').value;
+    if (!f || !w) return toast('Hafta ve görsel seçin.');
+    ev.target.disabled = true;
+    try { await publishImage(f, w); toast('Görsel yayınlandı.'); $('#imgFile').value = ''; loadImgList(); if (mondayOf(w) === mondayOf(selDate)) watchWeek(); }
+    catch (err) { toast('Yüklenemedi: ' + err.message); } finally { ev.target.disabled = false; }
+  };
+  loadImgList();
   $('#btnExp').onclick = async () => {
     if (!rows.length) return toast('Bu günde kayıt yok.');
     const X = await loadXLSX();
@@ -355,6 +469,40 @@ function tabVardiya(b) {
 }
 
 
+
+/* --- Vardiya görselleri (Firestore'da küçültülmüş JPEG olarak; Storage ücretli olduğu için) --- */
+async function compressImage(file) {
+  const img = await imgFromFile(file); let maxW = 1800;
+  for (let i = 0; i < 6; i++) {
+    const k = Math.min(1, maxW / img.width), cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    for (const q of [0.82, 0.7, 0.58]) { const url = cv.toDataURL('image/jpeg', q); if (url.length <= 760000) return { url, w: cv.width, h: cv.height }; }
+    maxW = Math.round(maxW * 0.8);
+  }
+  throw new Error('Görsel çok büyük, daha küçük bir görüntü deneyin.');
+}
+async function publishImage(file, weekStart) {
+  const ws = mondayOf(weekStart), { url, w, h } = await compressImage(file);
+  await setDoc(doc(db, 'shiftImages', ws), { weekStart: ws, data: url, w, h, createdAt: serverTimestamp(), by: me?.ad || '' });
+  return ws;
+}
+async function loadImgList() {
+  const el = $('#imgList'); if (!el) return;
+  try {
+    const snap = await getDocs(query(collection(db, 'shiftImages'), orderBy('weekStart', 'desc'), limit(8)));
+    if (!el.isConnected) return;
+    el.innerHTML = snap.empty ? '<p class="empty">Henüz görsel yüklenmedi.</p>' : snap.docs.map(d => { const x = d.data(); return `<figure>
+      <img src="${x.data}" alt="" data-view="${esc(d.id)}"><figcaption><b>${fmtDate(x.weekStart).slice(0, 5)} – ${fmtDate(addDays(x.weekStart, 6)).slice(0, 5)}</b>
+      <button class="btn danger small" data-delimg="${esc(d.id)}">Sil</button></figcaption></figure>`; }).join('');
+    el.onclick = async ev => {
+      const v = ev.target.dataset.view, dl = ev.target.dataset.delimg;
+      if (v) openImg(ev.target.src);
+      if (dl && confirm('Bu haftanın görseli silinsin mi?')) { await deleteDoc(doc(db, 'shiftImages', dl)).catch(x => toast(x.message)); loadImgList(); if (dl === mondayOf(selDate)) watchWeek(); }
+    };
+  } catch (e) { el.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+
 /* --- Görselden vardiya (OCR) --- */
 let tessP = null;
 const loadTess = () => tessP ||= new Promise((res, rej) => {
@@ -367,6 +515,7 @@ const loadTess = () => tessP ||= new Promise((res, rej) => {
 const imgFromFile = f => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Görsel açılamadı')); i.src = URL.createObjectURL(f); });
 
 async function runOcr(file) {
+  ocrFile = file;
   const out = $('#ocrOut'); out.innerHTML = '<p class="hint" id="ocrMsg">Görsel hazırlanıyor…</p>';
   const msg = t => { const m = $('#ocrMsg'); if (m) m.textContent = t; };
   try {
@@ -404,7 +553,7 @@ function renderOcrPreview(res) {
         ${r.cells.map(c => `<td><input class="cell ${c.flag || (c.text === 'B' ? 'off' : '')}" value="${esc(c.text)}" title="${esc(c.note || '')}" placeholder="B"></td>`).join('')}
       </tr>`).join('')}</tbody></table></div>
     <p class="hint">Sicil/telefon boş bırakılırsa kişi kaydedilmez. Yeni kişiler Çalışanlar listesine otomatik eklenir. Hücre biçimi: <b>08:45-16:45</b>, izin için <b>B</b> veya boş.</p>
-    <div class="rowbtn"><button class="btn" id="btnOcrSave">Vardiyayı kaydet</button></div>`;
+    <div class="rowbtn"><button class="btn" id="btnOcrSave">Vardiyayı kaydet</button><button class="btn light" id="btnOcrImg">Sadece görseli yayınla</button></div>`;
 
   const trs = [...out.querySelectorAll('tbody tr')];
   const fillRow = (tr, e) => { tr.querySelector('.sic-in').value = e?.sicil || ''; tr.querySelector('.tel-in').value = e?.telefon || ''; if (e) tr.querySelector('.nm-in').value = e.ad; };
@@ -418,6 +567,12 @@ function renderOcrPreview(res) {
   const upd = () => dl.forEach((_, i) => { const d = dayDate(i); $('#dl' + i).textContent = d ? fmtDate(d).slice(0, 5) : ''; });
   wk.onchange = upd; upd();
 
+  $('#btnOcrImg').onclick = async ev => {
+    if (!wk.value) return toast('Hafta başlangıç tarihini seçin.');
+    ev.target.disabled = true;
+    try { await publishImage(ocrFile, wk.value); toast('Görsel yayınlandı.'); if (mondayOf(wk.value) === mondayOf(selDate)) watchWeek(); loadImgList(); }
+    catch (err) { toast('Yüklenemedi: ' + err.message); } finally { ev.target.disabled = false; }
+  };
   $('#btnOcrSave').onclick = async ev => {
     if (!wk.value) return toast('Hafta başlangıç tarihini seçin.');
     const list = [], offs = []; let bad = 0, skipped = 0;
@@ -440,7 +595,8 @@ function renderOcrPreview(res) {
     ev.target.disabled = true; ev.target.textContent = 'Kaydediliyor…';
     try {
       const r = await saveShifts(list, offs);
-      toast(`${r.count} kayıt işlendi` + (r.newEmp ? `, ${r.newEmp} yeni çalışan` : '')); out.innerHTML = '';
+      let imgOk = true; try { await publishImage(ocrFile, wk.value); } catch (err) { imgOk = false; }
+      toast(`${r.count} kayıt işlendi` + (r.newEmp ? `, ${r.newEmp} yeni çalışan` : '') + (imgOk ? ', görsel yayınlandı' : ', görsel yayınlanamadı')); out.innerHTML = ''; watchWeek();
     } catch (err) { toast('Hata: ' + err.message); ev.target.disabled = false; ev.target.textContent = 'Vardiyayı kaydet'; }
   };
 }
@@ -572,5 +728,5 @@ function tabAyar(b) {
 }
 
 /* ---------- Başlat ---------- */
-watchRows(); renderHeader(); renderDash();
+restoreStaff(); renderHeader(); renderDash();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });

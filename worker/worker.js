@@ -134,6 +134,15 @@ export default {
     if (u.pathname === '/test' && u.searchParams.get('key') === env.WEBHOOK_SECRET) {     // elle çalıştır: sonucu gösterir
       try { return Response.json(await tick(env)); } catch (e) { return new Response('Hata: ' + e.message, { status: 500 }); }
     }
+    if (u.pathname === '/kur' || u.pathname === '/test') {
+      if (!env.WEBHOOK_SECRET) return new Response('WEBHOOK_SECRET tanımlı değil. Secret ekleyip Deploy butonuna basın.', { status: 500 });
+      return new Response('Anahtar hatalı: adresteki key, WEBHOOK_SECRET ile aynı değil.', { status: 403 });
+    }
+    if (u.pathname === '/durum') {                       // tanı: değişkenler tanımlı mı? (değerleri göstermez)
+      const v = k => !!env[k];
+      return Response.json({ FIREBASE_PROJECT: v('FIREBASE_PROJECT'), SITE_URL: v('SITE_URL'), SA_EMAIL: v('SA_EMAIL'),
+        SA_KEY: v('SA_KEY'), BOT_TOKEN: v('BOT_TOKEN'), WEBHOOK_SECRET: v('WEBHOOK_SECRET'), WEBHOOK_SECRET_uzunluk: (env.WEBHOOK_SECRET || '').length });
+    }
     return new Response('Takip worker çalışıyor.');
   }
 };

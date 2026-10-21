@@ -20,7 +20,20 @@
 </header>
 
 <main>
-  <section id="viewDash">
+  <section id="viewLogin" hidden>
+    <div class="card loginbox">
+      <h2>Hoş geldiniz</h2>
+      <p class="hint">Devam etmek için sicil numaranızı girin.</p>
+      <form id="frmStaff">
+        <input id="inStaff" inputmode="numeric" autocomplete="off" placeholder="Sicil no" aria-label="Sicil no" required>
+        <button class="btn" id="btnStaffGo">Giriş</button>
+      </form>
+      <p class="err" id="staffErr"></p>
+    </div>
+  </section>
+
+  <section id="viewDash" hidden>
+    <div class="card hello" id="hello" hidden></div>
     <div class="bar">
       <label class="datebox">Tarih <input type="date" id="selDate"></label>
       <button class="btn small light" id="btnToday">Bugün</button>
@@ -31,6 +44,8 @@
       <h2 id="ttlWork">Bugün Çalışanlar</h2>
       <div class="cols" id="listWork"></div>
     </div>
+
+    <div class="card" id="cardWeek" hidden></div>
 
     <div class="card">
       <h2>Giriş / Çıkış Durumu</h2>
@@ -67,6 +82,7 @@
   </form>
 </dialog>
 
+<dialog id="dlgImg" class="imgdlg"><form method="dialog"><button class="btn light small closeimg">Kapat</button></form><div class="imgwrap"><img id="imgBig" alt="Vardiya"></div></dialog>
 <div id="toast" class="toast" hidden></div>
 <script type="module" src="js/app.js"></script>
 </body>
