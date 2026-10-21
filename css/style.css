@@ -97,3 +97,33 @@ textarea{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);b
 .imglist figcaption{display:flex;justify-content:space-between;align-items:center;gap:4px;font-size:12px;margin-top:6px}
 .imgdlg{width:min(1100px,96vw);max-height:94vh;padding:10px}
 .imgwrap{overflow:auto;max-height:82vh;margin-top:8px}.imgwrap img{width:100%;min-width:700px;height:auto;display:block}
+
+/* ---- Yumuşak, okunaklı pano ---- */
+:root{--bg:#f4f6fa;--line:#e6eaf0;--ok:#1f7a4d;--okbg:#e6f5ec;--bad:#b4403a;--badbg:#fdeceb;--wait:#6a7686;--waitbg:#eef1f6}
+.card{border-radius:16px;box-shadow:0 1px 3px rgba(31,58,95,.06),0 6px 18px rgba(31,58,95,.04);border-color:#e9edf3;padding:16px}
+.card>h2{font-size:18px;margin-bottom:12px}
+#viewDash .cols{gap:14px}
+#viewDash .col{border-radius:12px;padding:12px 14px}
+#viewDash .col.sabah{background:#fffaf0}
+#viewDash .col.aksam{background:#f3f6fd}
+#viewDash .col h3{font-size:13px;color:#4b5a6d;display:flex;align-items:center;gap:6px;margin-bottom:8px}
+#viewDash .col.sabah h3::before{content:"☀";color:#d99100}
+#viewDash .col.aksam h3::before{content:"☾";color:#4a62b3}
+#viewDash .cnt{background:#fff;color:#4b5a6d;font-weight:700}
+#viewDash .row{font-size:16px;padding:10px 0;border-bottom-color:#00000010;align-items:center}
+#viewDash .nm{font-weight:600;color:var(--ink);white-space:normal}
+#viewDash .tm{background:#fff;border-radius:8px;padding:3px 10px;font-weight:700;font-size:15px;color:#2a3a52;box-shadow:inset 0 0 0 1px #0000000f}
+#viewDash .row.st{flex-direction:column;align-items:stretch;gap:8px}
+#viewDash .chips{gap:8px}
+#viewDash .chip{display:flex;flex-direction:column;align-items:flex-start;gap:1px;border-radius:10px;padding:7px 12px;min-width:96px;font-size:13px;line-height:1.25}
+#viewDash .chip .cl{font-weight:600;opacity:.85}
+#viewDash .chip .cs{font-size:15px;font-weight:800}
+#viewDash .chip.ok{background:var(--okbg);color:var(--ok)}
+#viewDash .chip.bad{background:var(--badbg);color:var(--bad)}
+#viewDash .chip.wait{background:var(--waitbg);color:var(--wait)}
+.legend{font-size:13px;gap:16px}
+.stats .pill{font-size:13px;padding:5px 12px}
+.hello .chips{display:flex;gap:8px;flex-wrap:wrap}
+.hello .chip{padding:6px 12px;font-size:13px;border-radius:10px}
+.ocr .cell.chg{background:#eaf2fd;border-color:#5b8fd6}
+@media(max-width:560px){#viewDash .cols{grid-template-columns:1fr}}

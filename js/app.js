@@ -22,7 +22,10 @@ const tel10 = t => String(t ?? '').replace(/\D/g, '').slice(-10);
 const newToken = () => [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
 const emailOf = sicil => `${sicil}@bimtakip.app`;
 
-const DEF = { girisOnce: 14, girisSonra: 15, cikisOnce: 15, cikisSonra: 15, aralik: 5, esik: '12:00' };
+const DEF = { girisOnce: 14, girisSonra: 15, cikisOnce: 15, cikisSonra: 15, aralik: 5 };
+// Sabahçı: yalnızca girişi tam 08:45 olanlar. Diğer tüm girişler (10:45, 11:15, 14:15…) akşamcı sayılır.
+const SABAH_GIRIS = '08:45';
+const groupOf = t => t === SABAH_GIRIS ? 'sabah' : 'aksam';
 let S = { ...DEF };
 let rows = [], employees = [], me = null, selDate = todayStr();
 let unsubRows = null, unsubEmp = null, adminTab = 'vardiya', parsed = null;
@@ -77,7 +80,7 @@ function renderHello() {
   const el = $('#hello'), sc = mySicil();
   if (!sc) { el.hidden = true; return; }
   const ad = me?.ad || staff?.ad || sc, g = mine.find(r => r.type === 'giris'), c = mine.find(r => r.type === 'cikis'), any = g || c;
-  const grp = any ? (any.group === 'aksam' ? 'aksam' : 'sabah') : '';
+  const grp = any ? (g ? groupOf(g.planned) : 'aksam') : '';
   const ch = (r, l) => { if (!r) return ''; const st = stateOf(r); return `<span class="chip ${st}">${l} ${r.planned} ${st === 'ok' ? '✓ onaylandı' : st === 'bad' ? '! bekleniyor' : '· zamanı gelmedi'}</span>`; };
   el.hidden = false;
   el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz</small><h2>${esc(ad)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : ''}</div>` +
@@ -99,24 +102,24 @@ function people() {
   const m = new Map();
   for (const r of rows) {
     let p = m.get(r.sicil);
-    if (!p) { p = { sicil: r.sicil, ad: r.ad, giris: null, cikis: null, group: r.group || 'sabah' }; m.set(r.sicil, p); }
+    if (!p) { p = { sicil: r.sicil, ad: r.ad, giris: null, cikis: null, group: 'aksam' }; m.set(r.sicil, p); }
     p[r.type] = r;
-    if (r.type === 'giris') p.group = r.group || p.group;
+    if (r.type === 'giris') p.group = groupOf(r.planned);
   }
   return [...m.values()].sort((a, b) =>
     ((a.giris?.planned || a.cikis?.planned || '99') + a.ad).localeCompare((b.giris?.planned || b.cikis?.planned || '99') + b.ad, 'tr'));
 }
 
 const stateOf = r => !r ? 'none' : r.confirmed ? 'ok' : Date.now() < r.windowStart ? 'wait' : 'bad';
-const col = (title, list, fn) => `<div class="col"><h3>${title}<span class="cnt">${list.length}</span></h3>${
+const col = (title, list, fn, cls) => `<div class="col ${cls}"><h3>${title}<span class="cnt">${list.length}</span></h3>${
   list.length ? list.map(fn).join('') : '<p class="empty">Kayıt yok</p>'}</div>`;
 
 function chip(r, label) {
   if (!r) return '';
   const st = stateOf(r);
-  const icon = st === 'ok' ? '✓' : st === 'bad' ? '!' : '·';
+  const txt = st === 'ok' ? '✓ Yapıldı' : st === 'bad' ? 'Yapılmadı' : 'Bekliyor';
   const info = `${label} ${r.planned}` + (r.reminders ? ` • ${r.reminders} hatırlatma` : '');
-  return `<button class="chip ${st} ${me ? 'adm' : ''}" data-id="${esc(r.id)}" title="${esc(info)}">${label} ${r.planned} ${icon}</button>`;
+  return `<button class="chip ${st} ${me ? 'adm' : ''}" data-id="${esc(r.id)}" title="${esc(info)}"><span class="cl">${label} ${r.planned}</span><span class="cs">${txt}</span></button>`;
 }
 
 function renderDash() {
@@ -125,9 +128,9 @@ function renderDash() {
   const ps = people();
   const sabah = ps.filter(p => p.group !== 'aksam'), aksam = ps.filter(p => p.group === 'aksam');
   $('#listWork').innerHTML =
-    col('Sabahçılar', sabah, workRow) + col('Akşamcılar', aksam, workRow);
+    col('Sabahçılar', sabah, workRow, 'sabah') + col('Akşamcılar', aksam, workRow, 'aksam');
   $('#listStatus').innerHTML =
-    col('Sabahçılar', sabah, statRow) + col('Akşamcılar', aksam, statRow);
+    col('Sabahçılar', sabah, statRow, 'sabah') + col('Akşamcılar', aksam, statRow, 'aksam');
 
   const g = rows.filter(r => r.type === 'giris'), c = rows.filter(r => r.type === 'cikis');
   const bad = rows.filter(r => stateOf(r) === 'bad').length;
@@ -345,7 +348,6 @@ async function parseExcel(file) {
   return { rows: out, skipped };
 }
 
-const groupOf = t => t < S.esik ? 'sabah' : 'aksam';
 
 async function saveShifts(list, offs = []) {
   const dates = [...new Set([...list, ...offs].map(r => r.date))];
@@ -382,7 +384,7 @@ async function saveShifts(list, offs = []) {
       ops.push([doc(db, 'attendance', id), data]); count++;
     }
   }
-  for (const o of offs) for (const t of ['giris', 'cikis']) ops.push([doc(db, 'attendance', `${o.date}_${o.sicil}_${t}`), null]);
+  for (const o of offs) for (const t of (o.types || ['giris', 'cikis'])) ops.push([doc(db, 'attendance', `${o.date}_${o.sicil}_${t}`), null]);
   for (let i = 0; i < ops.length; i += 400) {
     const b = writeBatch(db);
     ops.slice(i, i + 400).forEach(([ref, data]) => data === null ? b.delete(ref) : b.set(ref, data, { merge: true }));
@@ -404,6 +406,11 @@ function tabVardiya(b) {
     <p class="hint">Vardiya tablosunun ekran görüntüsünü seçin. Okunan değerler aşağıda <b>düzenlenebilir tablo</b> olarak gelir; kontrol edip kaydedin. Sarı = şüpheli, kırmızı = okunamadı/hatalı. Boş veya "B" = izinli.</p>
     <div class="rowbtn"><input type="file" id="fileImg" accept="image/*"></div>
     <div id="ocrOut"></div></div>
+  <div class="card" id="cardEdit"><h2>Vardiyayı Düzenle</h2>
+    <p class="hint">Kaydedilmiş vardiyayı hafta bazında düzeltin. Hücre: <b>08:45-16:45</b>, yalnızca giriş için <b>08:45-</b>, izin için <b>B</b> veya boş. Onaylar korunur.</p>
+    <div class="rowbtn"><label class="datebox">Hafta başlangıcı <input type="date" id="edWeek" value="${mondayOf(selDate)}"></label>
+      <button class="btn light small" id="btnEdLoad">Yükle</button></div>
+    <div id="edOut"></div></div>
   <div class="card"><h2>Vardiya Görselleri</h2>
     <p class="hint">Yüklediğiniz görsel, tüm çalışanlara "Haftalık Vardiya" olarak görünür. OCR ile kaydettiğinizde görsel de otomatik yayınlanır. Aynı haftaya yeniden yüklerseniz eskisinin yerine geçer.</p>
     <div class="form"><label>Hafta başlangıcı (Pazartesi)<input type="date" id="imgWeek" value="${mondayOf(selDate)}"></label>
@@ -442,6 +449,7 @@ function tabVardiya(b) {
     } catch (err) { $('#prev').innerHTML = `<p class="err">${esc(err.message)}</p>`; }
   };
   $('#fileImg').onchange = e => { const f = e.target.files[0]; if (f) runOcr(f); };
+  $('#edWeek').onchange = loadEditor; $('#btnEdLoad').onclick = loadEditor; loadEditor();
   $('#btnImgPub').onclick = async ev => {
     const f = $('#imgFile').files[0], w = $('#imgWeek').value;
     if (!f || !w) return toast('Hafta ve görsel seçin.');
@@ -469,6 +477,60 @@ function tabVardiya(b) {
 }
 
 
+
+/* --- Kayıtlı vardiyayı düzenle (hafta tablosu) --- */
+async function loadEditor() {
+  const out = $('#edOut'); if (!out) return;
+  const wkIn = $('#edWeek'); if (!wkIn.value) return;
+  const ws = mondayOf(wkIn.value), dates = [...Array(7)].map((_, i) => addDays(ws, i));
+  out.innerHTML = '<p class="hint">Yükleniyor…</p>';
+  try {
+    const snap = await getDocs(query(collection(db, 'attendance'), where('date', 'in', dates)));
+    const m = new Map();
+    snap.forEach(d => { const r = d.data(); let p = m.get(r.sicil); if (!p) { p = { sicil: r.sicil, ad: r.ad, cells: Array(7).fill(null) }; m.set(r.sicil, p); }
+      const i = dates.indexOf(r.date); p.cells[i] ??= {}; p.cells[i][r.type] = r.planned; });
+    const list = [...m.values()].sort((a, b) => (a.ad || '').localeCompare(b.ad || '', 'tr'));
+    renderEditor(ws, dates, list);
+  } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+const cellTxt = c => !c ? 'B' : `${c.giris || ''}-${c.cikis || ''}`;
+
+function renderEditor(ws, dates, list) {
+  const out = $('#edOut'), DN = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+  const addable = () => employees.filter(e => !list.some(p => p.sicil === e.sicil) && e.aktif !== false);
+  const draw = () => {
+    out.innerHTML = `<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
+      list.map((p, ri) => `<tr data-r="${ri}"><td><b>${esc(p.ad)}</b><br><small class="hint">${esc(p.sicil)}</small></td>${
+        p.cells.map(c => { const t = cellTxt(c); return `<td><input class="cell ${t === 'B' ? 'off' : ''}" value="${t === 'B' ? '' : esc(t)}" data-orig="${t === 'B' ? '' : esc(t)}" placeholder="B"></td>`; }).join('')}</tr>`).join('') ||
+      `<tr><td colspan="8" class="empty">Bu hafta için kayıt yok. Aşağıdan kişi ekleyip saat girebilirsiniz.</td></tr>`}</tbody></table></div>
+      <div class="rowbtn"><select id="edAdd" style="max-width:260px"><option value="">+ Kişi ekle…</option>${addable().map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('')}</select>
+      <button class="btn" id="btnEdSave">Değişiklikleri kaydet</button></div>`;
+    $('#edAdd').onchange = ev => { const e = employees.find(x => x.sicil === ev.target.value); if (!e) return;
+      keep(); list.push({ sicil: e.sicil, ad: e.ad, cells: Array(7).fill(null) }); draw(); };
+    out.querySelectorAll('.cell').forEach(inp => inp.oninput = () => {
+      inp.className = 'cell' + (parseCell(inp.value, true) === null ? ' err' : inp.value.trim() !== inp.dataset.orig ? ' chg' : /^b?$/i.test(inp.value.trim()) ? ' off' : ''); });
+    $('#btnEdSave').onclick = save;
+  };
+  const keep = () => out.querySelectorAll('tbody tr[data-r]').forEach(tr => { const p = list[+tr.dataset.r];
+    [...tr.querySelectorAll('.cell')].forEach((c, i) => { const v = parseCell(c.value, true); if (v && v !== 'off') p.cells[i] = { giris: v.giris, cikis: v.cikis }; else if (v === 'off') p.cells[i] = null; }); });
+  const save = async ev => {
+    const upd = [], offs = []; let bad = 0;
+    out.querySelectorAll('tbody tr[data-r]').forEach(tr => { const p = list[+tr.dataset.r], emp = employees.find(x => x.sicil === p.sicil);
+      tr.querySelectorAll('.cell').forEach((c, i) => {
+        if (c.value.trim() === c.dataset.orig) return;
+        const v = parseCell(c.value, true), date = dates[i];
+        if (v === null) { c.classList.add('err'); bad++; }
+        else if (v === 'off') offs.push({ date, sicil: p.sicil });
+        else { upd.push({ sicil: p.sicil, ad: p.ad, tel: emp?.telefon || '', date, giris: v.giris, cikis: v.cikis }); if (!v.cikis) offs.push({ date, sicil: p.sicil, types: ['cikis'] }); }
+      }); });
+    if (bad) return toast(`${bad} hücre hatalı (kırmızı). Düzeltin.`);
+    if (!upd.length && !offs.length) return toast('Değişiklik yok.');
+    ev.target.disabled = true; ev.target.textContent = 'Kaydediliyor…';
+    try { await saveShifts(upd, offs); toast('Vardiya güncellendi.'); selDate = dates.includes(selDate) ? selDate : dates[0]; $('#selDate').value = selDate; watchRows(); loadEditor(); }
+    catch (err) { toast('Hata: ' + err.message); ev.target.disabled = false; ev.target.textContent = 'Değişiklikleri kaydet'; }
+  };
+  draw();
+}
 
 /* --- Vardiya görselleri (Firestore'da küçültülmüş JPEG olarak; Storage ücretli olduğu için) --- */
 async function compressImage(file) {
@@ -718,11 +780,10 @@ function tabAyar(b) {
       <label>Çıkış: kaç dk önce başlasın<input type="number" id="s3" min="0" max="120" value="${S.cikisOnce}"></label>
       <label>Çıkış: kaç dk sonra bitsin<input type="number" id="s4" min="0" max="120" value="${S.cikisSonra}"></label>
       <label>Hatırlatma aralığı (dk)<input type="number" id="s5" min="1" max="60" value="${S.aralik}"></label>
-      <label>Sabah/akşam sınırı (giriş saati)<input type="time" id="s6" value="${S.esik}"></label>
       <button class="btn">Kaydet</button></form></div>`;
   $('#frmSet').onsubmit = async e => {
     e.preventDefault();
-    S = { girisOnce: +$('#s1').value, girisSonra: +$('#s2').value, cikisOnce: +$('#s3').value, cikisSonra: +$('#s4').value, aralik: +$('#s5').value, esik: $('#s6').value };
+    S = { girisOnce: +$('#s1').value, girisSonra: +$('#s2').value, cikisOnce: +$('#s3').value, cikisSonra: +$('#s4').value, aralik: +$('#s5').value };
     try { await setDoc(doc(db, 'settings', 'main'), S); toast('Ayarlar kaydedildi.'); } catch (err) { toast(err.message); }
   };
 }

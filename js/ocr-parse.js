@@ -155,13 +155,16 @@ export function matchEmployee(nameRaw, employees) {
   return bs <= lim ? best : null;
 }
 
-// Hücre metni -> {giris,cikis} | 'off' | null (geçersiz)
-export function parseCell(s) {
+// Hücre metni -> {giris,cikis} | 'off' | null (geçersiz). openEnd=true ise "08:45-" (yalnızca giriş) da geçerli.
+export function parseCell(s, openEnd = false) {
   const t = String(s ?? '').trim();
   if (!t || /^(b|off|izin|-|–)$/i.test(t)) return 'off';
-  const m = t.match(/^(\d{1,2})[:.](\d{2})\s*[-–—\/]\s*(\d{1,2})[:.](\d{2})$/);
-  if (!m) return null;
-  const p = n => String(n).padStart(2, '0'), h1 = +m[1], m1 = +m[2], h2 = +m[3], m2 = +m[4];
-  if (h1 > 23 || h2 > 23 || m1 > 59 || m2 > 59) return null;
+  const m = t.match(/^(\d{1,2})[:.](\d{2})\s*[-–—\/]\s*(?:(\d{1,2})[:.](\d{2}))?$/);
+  if (!m || (!m[3] && !openEnd)) return null;
+  const p = n => String(n).padStart(2, '0'), h1 = +m[1], m1 = +m[2];
+  if (h1 > 23 || m1 > 59) return null;
+  if (!m[3]) return { giris: `${p(h1)}:${m[2]}`, cikis: null };
+  const h2 = +m[3], m2 = +m[4];
+  if (h2 > 23 || m2 > 59) return null;
   return { giris: `${p(h1)}:${m[2]}`, cikis: `${p(h2)}:${m[4]}` };
 }
