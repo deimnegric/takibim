@@ -67,3 +67,13 @@ dialog h2{margin-bottom:4px}
 .center{min-height:100vh;display:grid;place-items:center;padding:16px}
 .box{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px;width:min(380px,100%);text-align:center}
 .big{font-size:44px;margin:0}
+
+/* OCR önizleme */
+.ocr table{min-width:880px}
+.ocr input,.ocr select{padding:5px 6px;font-size:12px;margin-bottom:3px}
+.ocr .cell{width:104px;text-align:center;font-variant-numeric:tabular-nums}
+.ocr .cell.warn{background:#fff6dc;border-color:#e0a800}
+.ocr .cell.err,.ocr input.err{background:#fbeceb;border-color:#b3261e}
+.ocr .cell.off{background:#eaf2fd;color:#2b6cb0;font-weight:600}
+.ocr th small{font-weight:400}
+textarea{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px}

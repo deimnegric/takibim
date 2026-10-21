@@ -4,6 +4,7 @@ import { getFirestore, collection, doc, query, where, onSnapshot, getDocs, getDo
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { firebaseConfig } from "./firebase-config.js";
+import { parseGrid, matchEmployee, parseCell } from "./ocr-parse.js";
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -245,8 +246,8 @@ async function parseExcel(file) {
 
 const groupOf = t => t < S.esik ? 'sabah' : 'aksam';
 
-async function saveShifts(list) {
-  const dates = [...new Set(list.map(r => r.date))];
+async function saveShifts(list, offs = []) {
+  const dates = [...new Set([...list, ...offs].map(r => r.date))];
   const existing = new Set();
   for (let i = 0; i < dates.length; i += 30) {
     const snap = await getDocs(query(collection(db, 'attendance'), where('date', 'in', dates.slice(i, i + 30))));
@@ -280,9 +281,10 @@ async function saveShifts(list) {
       ops.push([doc(db, 'attendance', id), data]); count++;
     }
   }
+  for (const o of offs) for (const t of ['giris', 'cikis']) ops.push([doc(db, 'attendance', `${o.date}_${o.sicil}_${t}`), null]);
   for (let i = 0; i < ops.length; i += 400) {
     const b = writeBatch(db);
-    ops.slice(i, i + 400).forEach(([ref, data]) => b.set(ref, data, { merge: true }));
+    ops.slice(i, i + 400).forEach(([ref, data]) => data === null ? b.delete(ref) : b.set(ref, data, { merge: true }));
     await b.commit();
   }
   const today = todayStr();
@@ -297,6 +299,10 @@ function tabVardiya(b) {
     <p class="hint">Sütunlar: <b>Sicil, Ad Soyad, Telefon, Tarih, Giriş, Çıkış</b> (ya da "Vardiya" sütununda 08:45-17:45). Aynı gün tekrar yüklenirse onaylar silinmez.</p>
     <div class="rowbtn"><input type="file" id="fileX" accept=".xlsx,.xls,.csv"><button class="btn light small" id="btnTpl">Örnek şablon indir</button></div>
     <div id="prev"></div></div>
+  <div class="card"><h2>Görselden Vardiya Yükle (OCR)</h2>
+    <p class="hint">Vardiya tablosunun ekran görüntüsünü seçin. Okunan değerler aşağıda <b>düzenlenebilir tablo</b> olarak gelir; kontrol edip kaydedin. Sarı = şüpheli, kırmızı = okunamadı/hatalı. Boş veya "B" = izinli.</p>
+    <div class="rowbtn"><input type="file" id="fileImg" accept="image/*"></div>
+    <div id="ocrOut"></div></div>
   <div class="card"><h2>Seçili gün: ${fmtDate(selDate)}</h2>
     <div class="rowbtn"><button class="btn" id="btnExp">Excel'e aktar</button><button class="btn danger" id="btnDelDay">Bu günün vardiyasını sil</button></div></div>`;
 
@@ -329,6 +335,7 @@ function tabVardiya(b) {
       };
     } catch (err) { $('#prev').innerHTML = `<p class="err">${esc(err.message)}</p>`; }
   };
+  $('#fileImg').onchange = e => { const f = e.target.files[0]; if (f) runOcr(f); };
   $('#btnExp').onclick = async () => {
     if (!rows.length) return toast('Bu günde kayıt yok.');
     const X = await loadXLSX();
@@ -347,6 +354,97 @@ function tabVardiya(b) {
   };
 }
 
+
+/* --- Görselden vardiya (OCR) --- */
+let tessP = null;
+const loadTess = () => tessP ||= new Promise((res, rej) => {
+  if (window.Tesseract) return res(window.Tesseract);
+  const sc = document.createElement('script');
+  sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  sc.onload = () => res(window.Tesseract); sc.onerror = () => rej(new Error('OCR kütüphanesi yüklenemedi (internet bağlantısını kontrol edin)'));
+  document.head.appendChild(sc);
+});
+const imgFromFile = f => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Görsel açılamadı')); i.src = URL.createObjectURL(f); });
+
+async function runOcr(file) {
+  const out = $('#ocrOut'); out.innerHTML = '<p class="hint" id="ocrMsg">Görsel hazırlanıyor…</p>';
+  const msg = t => { const m = $('#ocrMsg'); if (m) m.textContent = t; };
+  try {
+    const img = await imgFromFile(file), k = Math.min(3, Math.max(1.5, 2400 / Math.max(img.width, img.height)));
+    const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+    const cx = cv.getContext('2d', { willReadFrequently: true }); cx.imageSmoothingQuality = 'high'; cx.drawImage(img, 0, 0, cv.width, cv.height);
+    const probe = (x, y) => {
+      try { const d = cx.getImageData(Math.round(x) - 3, Math.round(y) - 3, 7, 7).data; let r = 0, b = 0, n = d.length / 4;
+        for (let i = 0; i < d.length; i += 4) { r += d[i]; b += d[i + 2]; } r /= n; b /= n; return (b - r >= 6 && b > 200) ? 'blue' : 'white'; } catch { return null; }
+    };
+    msg('OCR motoru yükleniyor (ilk seferde biraz sürer)…');
+    const T = await loadTess();
+    const worker = await T.createWorker('eng', 1, { logger: m => { if (m.status === 'recognizing text') msg(`Okunuyor… %${Math.round(m.progress * 100)}`); } });
+    await worker.setParameters({ tessedit_pageseg_mode: '11', user_defined_dpi: '150' });
+    const { data } = await worker.recognize(cv);
+    await worker.terminate();
+    const words = (data.words || []).map(w => ({ text: w.text, conf: w.confidence, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 }));
+    const res = parseGrid(words, { probe, year: +todayStr().slice(0, 4) });
+    if (!res.rows.length) { out.innerHTML = `<p class="err">${esc(res.warnings.join(' ') || 'Tablo okunamadı.')}</p>`; return; }
+    renderOcrPreview(res);
+  } catch (err) { out.innerHTML = `<p class="err">${esc(err.message)}</p>`; }
+}
+
+function renderOcrPreview(res) {
+  const out = $('#ocrOut'), dl = [...Array(7)].map(() => '');
+  const empOpts = '<option value="">— seç / yeni —</option>' + employees.map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('');
+  out.innerHTML = `
+    ${res.warnings.map(w => `<p class="err">${esc(w)}</p>`).join('')}
+    <div class="rowbtn"><label class="datebox">Hafta başlangıcı (Pazartesi) <input type="date" id="wkStart" value="${res.weekStart || ''}"></label></div>
+    <div class="tw ocr"><table><thead><tr><th>Ad (OCR)</th><th>Çalışan / Sicil</th><th>Telefon</th>${res.days.map((d, i) => `<th data-d="${i}">${d}<br><small id="dl${i}"></small></th>`).join('')}</tr></thead><tbody>${
+      res.rows.map((r, ri) => `<tr data-r="${ri}">
+        <td><input class="nm-in" value="${esc(r.nameRaw)}"><small class="hint">${esc(r.tag)}</small></td>
+        <td><select class="emp-sel">${empOpts}</select><input class="sic-in" placeholder="Sicil no" inputmode="numeric"></td>
+        <td><input class="tel-in" placeholder="05xx…" inputmode="tel"></td>
+        ${r.cells.map(c => `<td><input class="cell ${c.flag || (c.text === 'B' ? 'off' : '')}" value="${esc(c.text)}" title="${esc(c.note || '')}" placeholder="B"></td>`).join('')}
+      </tr>`).join('')}</tbody></table></div>
+    <p class="hint">Sicil/telefon boş bırakılırsa kişi kaydedilmez. Yeni kişiler Çalışanlar listesine otomatik eklenir. Hücre biçimi: <b>08:45-16:45</b>, izin için <b>B</b> veya boş.</p>
+    <div class="rowbtn"><button class="btn" id="btnOcrSave">Vardiyayı kaydet</button></div>`;
+
+  const trs = [...out.querySelectorAll('tbody tr')];
+  const fillRow = (tr, e) => { tr.querySelector('.sic-in').value = e?.sicil || ''; tr.querySelector('.tel-in').value = e?.telefon || ''; if (e) tr.querySelector('.nm-in').value = e.ad; };
+  trs.forEach((tr, i) => {
+    const e = matchEmployee(res.rows[i].nameRaw, employees);
+    if (e) { tr.querySelector('.emp-sel').value = e.sicil; fillRow(tr, e); }
+    tr.querySelector('.emp-sel').onchange = ev => fillRow(tr, employees.find(x => x.sicil === ev.target.value));
+    tr.querySelectorAll('.cell').forEach(inp => inp.oninput = () => { inp.className = 'cell' + (parseCell(inp.value) === null ? ' err' : /^b?$/i.test(inp.value.trim()) ? ' off' : ''); });
+  });
+  const wk = $('#wkStart'), dayDate = i => { if (!wk.value) return null; const d = new Date(wk.value + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + i); return d.toISOString().slice(0, 10); };
+  const upd = () => dl.forEach((_, i) => { const d = dayDate(i); $('#dl' + i).textContent = d ? fmtDate(d).slice(0, 5) : ''; });
+  wk.onchange = upd; upd();
+
+  $('#btnOcrSave').onclick = async ev => {
+    if (!wk.value) return toast('Hafta başlangıç tarihini seçin.');
+    const list = [], offs = []; let bad = 0, skipped = 0;
+    for (const tr of trs) {
+      const sicil = cleanSicil(tr.querySelector('.sic-in').value), ad = tr.querySelector('.nm-in').value.trim(), tel = tr.querySelector('.tel-in').value.trim();
+      const cells = [...tr.querySelectorAll('.cell')];
+      if (!sicil) { if (cells.some(c => parseCell(c.value) && parseCell(c.value) !== 'off')) skipped++; continue; }
+      const known = employees.find(x => x.sicil === sicil);
+      if (!known && (!ad || !tel)) { tr.querySelector('.tel-in').classList.add('err'); bad++; continue; }
+      cells.forEach((c, i) => {
+        const p = parseCell(c.value), date = dayDate(i);
+        if (p === null) { c.classList.add('err'); bad++; }
+        else if (p === 'off') offs.push({ date, sicil });
+        else list.push({ sicil, ad, tel, date, ...p });
+      });
+    }
+    if (bad) return toast(`${bad} hücre/alan hatalı (kırmızı). Düzeltin.`);
+    if (!list.length && !offs.length) return toast('Kaydedilecek satır yok.');
+    if (skipped && !confirm(`${skipped} kişinin sicil numarası boş; bunlar kaydedilmeyecek. Devam edilsin mi?`)) return;
+    ev.target.disabled = true; ev.target.textContent = 'Kaydediliyor…';
+    try {
+      const r = await saveShifts(list, offs);
+      toast(`${r.count} kayıt işlendi` + (r.newEmp ? `, ${r.newEmp} yeni çalışan` : '')); out.innerHTML = '';
+    } catch (err) { toast('Hata: ' + err.message); ev.target.disabled = false; ev.target.textContent = 'Vardiyayı kaydet'; }
+  };
+}
+
 /* --- Çalışanlar --- */
 function tabCalisan(b) {
   b.innerHTML = `
@@ -357,6 +455,10 @@ function tabCalisan(b) {
       <label>Telefon<input id="eTel" inputmode="tel" placeholder="05xx xxx xx xx"></label>
       <button class="btn">Kaydet</button>
     </form></div>
+  <div class="card"><h2>Toplu Ekle</h2>
+    <p class="hint">Her satıra bir kişi: <b>sicil;ad soyad;telefon</b> (Excel'den kopyalayıp yapıştırırsanız sekme ayracı da kabul edilir).</p>
+    <textarea id="bulk" rows="5" placeholder="1001;Ayşe Yılmaz;05321234567"></textarea>
+    <div class="rowbtn"><button class="btn" id="btnBulk">Ekle / Güncelle</button></div></div>
   <div class="card"><h2>Çalışanlar</h2><input id="eSearch" placeholder="Ara…"><div class="tw" id="empList"></div>
     <p class="hint">"Bot" sütunu, çalışanın Telegram botuna telefonunu paylaşıp paylaşmadığını gösterir. Bağlı olmayana mesaj gitmez.</p></div>`;
   $('#frmEmp').onsubmit = async e => {
@@ -366,6 +468,20 @@ function tabCalisan(b) {
     if (!cur) Object.assign(data, { isAdmin: false, notify: false });
     if (!cur?.token) data.token = newToken();
     try { await setDoc(doc(db, 'employees', sicil), data, { merge: true }); e.target.reset(); toast('Kaydedildi.'); } catch (err) { toast(err.message); }
+  };
+  $('#btnBulk').onclick = async () => {
+    const lines = $('#bulk').value.split(/\n/).map(l => l.split(/[;\t]/).map(x => x.trim())).filter(a => a[0]);
+    if (!lines.length) return toast('Satır yok.');
+    const bt = writeBatch(db); let n = 0;
+    for (const [sc, ad, tel] of lines) {
+      const sicil = cleanSicil(sc); if (!sicil || !ad) continue;
+      const cur = employees.find(x => x.sicil === sicil);
+      const d = { sicil, ad, telefon: tel || '', tel10: tel10(tel), aktif: true };
+      if (!cur) Object.assign(d, { isAdmin: false, notify: false });
+      if (!cur?.token) d.token = newToken();
+      bt.set(doc(db, 'employees', sicil), d, { merge: true }); n++;
+    }
+    try { await bt.commit(); $('#bulk').value = ''; toast(`${n} çalışan kaydedildi.`); } catch (err) { toast(err.message); }
   };
   $('#eSearch').oninput = renderEmpList;
   renderEmpList();

@@ -1,0 +1,16 @@
+name = "takip-bildirim"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+FIREBASE_PROJECT = "takibim-cdb44"
+SITE_URL = "https://deimnegric.github.io/takibim"
+
+# Secret'lar komutla eklenir (dosyaya yazmayın):
+#   npx wrangler secret put SA_EMAIL
+#   npx wrangler secret put SA_KEY
+#   npx wrangler secret put BOT_TOKEN
+#   npx wrangler secret put WEBHOOK_SECRET

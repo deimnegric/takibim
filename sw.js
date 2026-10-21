@@ -1,5 +1,5 @@
-const V = 'takip-v1';
-const SHELL = ['./', 'index.html', 'onay.html', 'css/style.css', 'js/app.js', 'js/firebase-config.js',
+const V = 'takip-v2';
+const SHELL = ['./', 'index.html', 'onay.html', 'css/style.css', 'js/app.js', 'js/firebase-config.js', 'js/ocr-parse.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
