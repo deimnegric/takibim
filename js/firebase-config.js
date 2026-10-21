@@ -1,9 +1,11 @@
 // Firebase Console > Proje Ayarları > Uygulamalarınız (Web) bölümündeki değerleri yapıştırın.
 export const firebaseConfig = {
-  apiKey: "BURAYA",
-  authDomain: "PROJE_ID.firebaseapp.com",
-  projectId: "PROJE_ID",
-  storageBucket: "PROJE_ID.appspot.com",
-  messagingSenderId: "BURAYA",
-  appId: "BURAYA"
+  apiKey: "AIzaSyDh-7jUYzk28RAwJ3bfIYXwB1poaW6tnQE",
+  authDomain: "takibim-cdb44.firebaseapp.com",
+  projectId: "takibim-cdb44",
+  storageBucket: "takibim-cdb44.firebasestorage.app",
+  messagingSenderId: "59728022972",
+  appId: "1:59728022972:web:531b570f136f8d81bc2fb9"
 };
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
