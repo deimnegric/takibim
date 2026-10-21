@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Onay</title>
+<meta name="theme-color" content="#1f3a5f">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="center"><div class="box" id="box"><p>Yükleniyor…</p></div></div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getFirestore, doc, getDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { firebaseConfig } from "./js/firebase-config.js";
+
+const db = getFirestore(initializeApp(firebaseConfig));
+const q = new URLSearchParams(location.search);
+const id = q.get('id'), t = q.get('t');
+const box = document.getElementById('box');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const show = (icon, title, text, btn) => {
+  box.innerHTML = `<p class="big">${icon}</p><h2>${title}</h2><p class="hint">${text}</p>${btn || ''}`;
+};
+
+(async () => {
+  if (!id || !t) return show('⚠️', 'Geçersiz bağlantı', 'Lütfen mesajdaki bağlantıyı kullanın.');
+  try {
+    const snap = await getDoc(doc(db, 'attendance', id));
+    if (!snap.exists()) return show('⚠️', 'Kayıt bulunamadı', 'Bu vardiya kaydı sistemde yok.');
+    const r = snap.data();
+    const tip = r.type === 'giris' ? 'Giriş' : 'Çıkış';
+    if (r.confirmed) return show('✅', `${tip} onaylandı`, `${esc(r.ad)} – ${r.planned} ${tip.toLowerCase()} kaydınız alındı. Teşekkürler!`);
+    show('🕘', `${tip} onayı`,
+      `${esc(r.ad)}, ${r.planned} ${tip.toLowerCase()} işleminizi <b>kalbim</b> uygulamasından yaptıysanız onaylayın.`,
+      '<p><button class="btn" id="go">Evet, işlemi yaptım</button></p>');
+    document.getElementById('go').onclick = async () => {
+      const b = document.getElementById('go'); b.disabled = true; b.textContent = 'Kaydediliyor…';
+      try {
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'confirms', id), { ctoken: t });
+        batch.update(doc(db, 'attendance', id), { confirmed: true, confirmedAt: serverTimestamp(), confirmedBy: 'calisan' });
+        await batch.commit();
+        show('✅', `${tip} onaylandı`, 'Teşekkürler, kaydınız alındı. Hatırlatma mesajları duracaktır.');
+      } catch (e) {
+        show('⚠️', 'Onaylanamadı', 'Bağlantı geçersiz olabilir veya kayıt zaten onaylanmış. Yöneticinize bildirin.');
+      }
+    };
+  } catch (e) {
+    show('⚠️', 'Hata', 'Kayıt okunamadı. İnternet bağlantınızı kontrol edin.');
+  }
+})();
+</script>
+</body>
+</html>
