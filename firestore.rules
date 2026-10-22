@@ -46,6 +46,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // İzinli günler (herkese görünür; belge kimliği = tarih_sicil)
+    match /offdays/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     match /settings/{id} {
       allow read, write: if isAdmin();
     }

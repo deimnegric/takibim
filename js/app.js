@@ -30,7 +30,7 @@ let S = { ...DEF };
 let rows = [], employees = [], me = null, selDate = todayStr();
 let unsubRows = null, unsubEmp = null, adminTab = 'vardiya', parsed = null;
 let staff = null, mine = [], weekDoc = null, adminOpen = false, curToday = todayStr(), rosterCache = null, ocrFile = null;
-let unsubMine = null, weekSeq = 0;
+let unsubMine = null, weekSeq = 0, unsubOff = null, offRows = [], mineOff = false;
 const ready = { staff: false, auth: false };
 const authorized = () => !!(me || staff);
 const mySicil = () => me?.sicil || staff?.sicil || null;
@@ -58,6 +58,9 @@ function watchRows() {
   unsubRows = onSnapshot(query(collection(db, 'attendance'), where('date', '==', selDate)),
     snap => { rows = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderDash(); },
     err => toast('Veri okunamadı: ' + err.message));
+  unsubOff?.(); offRows = [];
+  unsubOff = onSnapshot(query(collection(db, 'offdays'), where('date', '==', selDate)),
+    snap => { offRows = snap.docs.map(d => d.data()); renderDash(); }, () => { });
   watchWeek();
 }
 async function watchWeek() {
@@ -66,13 +69,14 @@ async function watchWeek() {
   catch { if (seq === weekSeq) renderWeek(); }
 }
 function watchMine() {
-  unsubMine?.(); unsubMine = null; mine = []; curToday = todayStr();
+  unsubMine?.(); unsubMine = null; mine = []; mineOff = false; curToday = todayStr();
   const sc = mySicil(); if (!sc) return renderHello();
+  getDoc(doc(db, 'offdays', `${curToday}_${sc}`)).then(d => { mineOff = d.exists(); renderHello(); }).catch(() => { });
   unsubMine = onSnapshot(query(collection(db, 'attendance'), where('sicil', '==', sc), where('date', '==', curToday)),
     snap => { mine = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderHello(); }, () => renderHello());
 }
 function startData() {
-  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubRows = unsubMine = null; rows = []; mine = []; weekDoc = null; return; }
+  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubOff?.(); unsubRows = unsubMine = unsubOff = null; rows = []; mine = []; offRows = []; weekDoc = null; return; }
   watchRows(); watchMine();
 }
 
@@ -80,12 +84,12 @@ function renderHello() {
   const el = $('#hello'), sc = mySicil();
   if (!sc) { el.hidden = true; return; }
   const ad = me?.ad || staff?.ad || sc, g = mine.find(r => r.type === 'giris'), c = mine.find(r => r.type === 'cikis'), any = g || c;
-  const grp = any ? (g ? groupOf(g.planned) : 'aksam') : '';
+  const full = g?.planned === '08:45' && c?.planned === '21:15', grp = any ? (full ? 'full' : g ? groupOf(g.planned) : 'aksam') : '';
   const ch = (r, l) => { if (!r) return ''; const st = stateOf(r); return `<span class="chip ${st}">${l} ${r.planned} ${st === 'ok' ? '✓ onaylandı' : st === 'bad' ? '! bekleniyor' : '· zamanı gelmedi'}</span>`; };
   el.hidden = false;
-  el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz</small><h2>${esc(ad)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : ''}</div>` +
+  el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz</small><h2>${esc(ad)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'full' ? 'Tam gün' : grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : mineOff ? '<span class="izin-pill">İzinli</span>' : ''}</div>` +
     (any ? `<p class="hello-line">Bugünkü vardiyanız: <b>${g?.planned || '–'} – ${c?.planned || '–'}</b></p><div class="chips">${ch(g, 'Giriş')}${ch(c, 'Çıkış')}</div>`
-         : '<p class="hello-line muted">Bugün için vardiya kaydınız yok (izinli olabilirsiniz).</p>');
+         : mineOff ? '<p class="hello-line">Bugün izinlisiniz.</p>' : '<p class="hello-line muted">Bugün için vardiya kaydınız yok (izinli olabilirsiniz).</p>');
 }
 
 function renderWeek() {
@@ -122,29 +126,42 @@ function chip(r, label) {
   return `<button class="chip ${st} ${me ? 'adm' : ''}" data-id="${esc(r.id)}" title="${esc(info)}"><span class="cl">${label} ${r.planned}</span><span class="cs">${txt}</span></button>`;
 }
 
+const isFull = p => p.giris?.planned === '08:45' && p.cikis?.planned === '21:15';
+function rowClass(p) {
+  const now = Date.now(), missed = r => r && !r.confirmed && now >= (r.windowEnd || Infinity);
+  if (p.cikis?.confirmed) return 'st-done';                       // çıkış yapıldı: renksiz
+  if (missed(p.cikis) || missed(p.giris)) return 'st-bad';        // unutuldu: tamamen kırmızı
+  if (p.giris?.confirmed) return 'st-ok';                         // giriş yapıldı: yeşil
+  return '';
+}
 function renderDash() {
   const isToday = selDate === todayStr();
   $('#ttlWork').textContent = isToday ? 'Bugün Çalışanlar' : `Çalışanlar – ${fmtDate(selDate)}`;
   const ps = people();
-  const sabah = ps.filter(p => p.group !== 'aksam'), aksam = ps.filter(p => p.group === 'aksam');
-  $('#listWork').innerHTML =
-    col('Sabahçılar', sabah, workRow, 'sabah') + col('Akşamcılar', aksam, workRow, 'aksam');
-  $('#listStatus').innerHTML =
-    col('Sabahçılar', sabah, statRow, 'sabah') + col('Akşamcılar', aksam, statRow, 'aksam');
+  const sabah = ps.filter(p => p.group !== 'aksam'), aksam = ps.filter(p => p.group === 'aksam' || isFull(p));   // 08:45-21:15 olanlar iki listede
+  const izin = offRows.filter(o => !ps.some(p => p.sicil === o.sicil)).sort((a, b) => (a.ad || '').localeCompare(b.ad || '', 'tr'));
+  $('#listWork').innerHTML = col('Sabahçılar', sabah, workRow, 'sabah') + col('Akşamcılar', aksam, workRow, 'aksam') +
+    (izin.length ? col('İzinliler', izin, izinRow, 'izin') : '');
 
   const g = rows.filter(r => r.type === 'giris'), c = rows.filter(r => r.type === 'cikis');
-  const bad = rows.filter(r => stateOf(r) === 'bad').length;
+  const missed = rows.filter(r => !r.confirmed && Date.now() >= r.windowEnd).length;
   $('#stats').innerHTML =
-    `<span class="pill">${ps.length} çalışan</span>` +
+    `<span class="pill">${ps.length} çalışan</span>` + (izin.length ? `<span class="pill blue">${izin.length} izinli</span>` : '') +
     `<span class="pill ok">Giriş ${g.filter(r => r.confirmed).length}/${g.length}</span>` +
     `<span class="pill ok">Çıkış ${c.filter(r => r.confirmed).length}/${c.length}</span>` +
-    (bad ? `<span class="pill bad">${bad} eksik</span>` : '');
+    (missed ? `<span class="pill bad">${missed} eksik</span>` : '');
 }
-const workRow = p => `<div class="row"><span class="nm">${esc(p.ad)}</span><span class="tm">${p.giris?.planned || '–'} – ${p.cikis?.planned || '–'}</span></div>`;
-const statRow = p => `<div class="row st"><span class="nm">${esc(p.ad)}</span><span class="chips">${chip(p.giris, 'Giriş')}${chip(p.cikis, 'Çıkış')}</span></div>`;
+const seg = (r, cls) => {
+  if (!r) return `<span class="${cls}">–</span>`;
+  const info = `${r.type === 'giris' ? 'Giriş' : 'Çıkış'} ${r.planned}: ${r.confirmed ? 'yapıldı' : 'bekleniyor'}` + (r.reminders ? ` • ${r.reminders} hatırlatma` : '') + (me ? ' — dokunarak onayla/geri al' : '');
+  return `<span class="${cls}${me ? ' adm' : ''}" data-id="${esc(r.id)}" title="${esc(info)}">${r.planned}</span>`;
+};
+const workRow = p => `<div class="row ${rowClass(p)}"><span class="nm">${esc(p.ad)}</span><span class="tm">${seg(p.giris, 'tg')}<i class="sep">–</i>${seg(p.cikis, 'tc')}</span></div>`;
+const izinRow = o => `<div class="row"><span class="nm">${esc(o.ad)}</span><span class="izin-pill">İzinli</span></div>`;
 
-$('#listStatus').addEventListener('click', async e => {
-  const b = e.target.closest('.chip.adm'); if (!b || !me) return;
+/* Yönetici: saate dokunarak giriş/çıkışı elle onayla veya geri al */
+$('#listWork').addEventListener('click', async e => {
+  const b = e.target.closest('.adm[data-id]'); if (!b || !me) return;
   const r = rows.find(x => x.id === b.dataset.id); if (!r) return;
   const msg = r.confirmed ? `${r.ad} – ${r.type === 'giris' ? 'giriş' : 'çıkış'} onayı geri alınsın mı?`
     : `${r.ad} – ${r.type === 'giris' ? 'giriş' : 'çıkış'} manuel olarak onaylansın mı?`;
@@ -384,6 +401,8 @@ async function saveShifts(list, offs = []) {
       ops.push([doc(db, 'attendance', id), data]); count++;
     }
   }
+  for (const r of list) ops.push([doc(db, 'offdays', `${r.date}_${r.sicil}`), null]);                  // çalışıyorsa izin kaydı kalmasın
+  for (const o of offs) if (!o.types) ops.push([doc(db, 'offdays', `${o.date}_${o.sicil}`), { date: o.date, sicil: o.sicil, ad: o.ad || '' }]);
   for (const o of offs) for (const t of (o.types || ['giris', 'cikis'])) ops.push([doc(db, 'attendance', `${o.date}_${o.sicil}_${t}`), null]);
   for (let i = 0; i < ops.length; i += 400) {
     const b = writeBatch(db);
@@ -409,7 +428,10 @@ function tabVardiya(b) {
   <div class="card" id="cardEdit"><h2>Vardiyayı Düzenle</h2>
     <p class="hint">Kaydedilmiş vardiyayı hafta bazında düzeltin. Hücre: <b>08:45-16:45</b>, yalnızca giriş için <b>08:45-</b>, izin için <b>B</b> veya boş. Onaylar korunur.</p>
     <div class="rowbtn"><label class="datebox">Hafta başlangıcı <input type="date" id="edWeek" value="${mondayOf(selDate)}"></label>
-      <button class="btn light small" id="btnEdLoad">Yükle</button></div>
+      <button class="btn light small" id="btnEdLoad">Yükle</button>
+      <button class="btn light small" id="btnEdXlsx">Excel'e indir</button>
+      <label class="btn light small filebtn">Düzenlenmiş Excel'i yükle<input type="file" id="edXlsxIn" accept=".xlsx,.xls" hidden></label></div>
+    <p class="hint">Excel'e indirip düzenleyin, aynı dosyayı geri yükleyin: yalnızca değişen hücreler sisteme otomatik aktarılır. Sütun başlıklarındaki tarihlere dokunmayın.</p>
     <div id="edOut"></div></div>
   <div class="card"><h2>Vardiya Görselleri</h2>
     <p class="hint">Yüklediğiniz görsel, tüm çalışanlara "Haftalık Vardiya" olarak görünür. OCR ile kaydettiğinizde görsel de otomatik yayınlanır. Aynı haftaya yeniden yüklerseniz eskisinin yerine geçer.</p>
@@ -450,6 +472,8 @@ function tabVardiya(b) {
   };
   $('#fileImg').onchange = e => { const f = e.target.files[0]; if (f) runOcr(f); };
   $('#edWeek').onchange = loadEditor; $('#btnEdLoad').onclick = loadEditor; loadEditor();
+  $('#btnEdXlsx').onclick = exportWeekXlsx;
+  $('#edXlsxIn').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) importWeekXlsx(f); };
   $('#btnImgPub').onclick = async ev => {
     const f = $('#imgFile').files[0], w = $('#imgWeek').value;
     if (!f || !w) return toast('Hafta ve görsel seçin.');
@@ -469,9 +493,9 @@ function tabVardiya(b) {
     const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(data), 'Rapor'); X.writeFile(wb, `takip-${selDate}.xlsx`);
   };
   $('#btnDelDay').onclick = async () => {
-    if (!rows.length) return toast('Bu günde kayıt yok.');
-    if (!confirm(`${fmtDate(selDate)} tarihli ${rows.length} kayıt silinsin mi?`)) return;
-    const bt = writeBatch(db); rows.forEach(r => bt.delete(doc(db, 'attendance', r.id)));
+    if (!rows.length && !offRows.length) return toast('Bu günde kayıt yok.');
+    if (!confirm(`${fmtDate(selDate)} tarihli ${rows.length} kayıt ve ${offRows.length} izin silinsin mi?`)) return;
+    const bt = writeBatch(db); rows.forEach(r => bt.delete(doc(db, 'attendance', r.id))); offRows.forEach(o => bt.delete(doc(db, 'offdays', `${selDate}_${o.sicil}`)));
     try { await bt.commit(); toast('Silindi.'); } catch (e) { toast('Silinemedi: ' + e.message); }
   };
 }
@@ -520,7 +544,7 @@ function renderEditor(ws, dates, list) {
         if (c.value.trim() === c.dataset.orig) return;
         const v = parseCell(c.value, true), date = dates[i];
         if (v === null) { c.classList.add('err'); bad++; }
-        else if (v === 'off') offs.push({ date, sicil: p.sicil });
+        else if (v === 'off') offs.push({ date, sicil: p.sicil, ad: p.ad });
         else { upd.push({ sicil: p.sicil, ad: p.ad, tel: emp?.telefon || '', date, giris: v.giris, cikis: v.cikis }); if (!v.cikis) offs.push({ date, sicil: p.sicil, types: ['cikis'] }); }
       }); });
     if (bad) return toast(`${bad} hücre hatalı (kırmızı). Düzeltin.`);
@@ -530,6 +554,75 @@ function renderEditor(ws, dates, list) {
     catch (err) { toast('Hata: ' + err.message); ev.target.disabled = false; ev.target.textContent = 'Değişiklikleri kaydet'; }
   };
   draw();
+}
+
+/* --- Excel ile düzenle: indir → düzenle → geri yükle (yalnızca farklar uygulanır) --- */
+const DN3 = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+async function fetchWeekMap(dates) {
+  const cur = new Map();                       // "tarih|sicil" -> {giris, cikis, ad}
+  for (let i = 0; i < dates.length; i += 30) {
+    const snap = await getDocs(query(collection(db, 'attendance'), where('date', 'in', dates.slice(i, i + 30))));
+    snap.forEach(d => { const r = d.data(), k = r.date + '|' + r.sicil; const c = cur.get(k) || { ad: r.ad }; c[r.type] = r.planned; cur.set(k, c); });
+    const so = await getDocs(query(collection(db, 'offdays'), where('date', 'in', dates.slice(i, i + 30))));
+    so.forEach(d => { const r = d.data(), k = r.date + '|' + r.sicil; const c = cur.get(k) || { ad: r.ad }; c.off = true; cur.set(k, c); });
+  }
+  return cur;
+}
+async function exportWeekXlsx() {
+  const wk = $('#edWeek').value; if (!wk) return toast('Hafta seçin.');
+  try {
+    const ws = mondayOf(wk), dates = [...Array(7)].map((_, i) => addDays(ws, i)), X = await loadXLSX(), cur = await fetchWeekMap(dates);
+    const bySic = new Map(); employees.filter(e => e.aktif !== false).forEach(e => bySic.set(e.sicil, { ad: e.ad, tel: e.telefon || '' }));
+    for (const k of cur.keys()) { const sc = k.split('|')[1]; if (!bySic.has(sc)) bySic.set(sc, { ad: cur.get(k).ad, tel: '' }); }
+    const list = [...bySic].sort((a, b) => (a[1].ad || '').localeCompare(b[1].ad || '', 'tr'));
+    const aoa = [['Sicil', 'Ad Soyad', 'Telefon', ...dates.map((d, i) => `${DN3[i]} ${fmtDate(d)}`)]];
+    for (const [sc, e] of list) aoa.push([sc, e.ad, e.tel, ...dates.map(d => { const c = cur.get(d + '|' + sc); return c && (c.giris || c.cikis) ? `${c.giris || ''}-${c.cikis || ''}` : 'B'; })]);
+    const sheet = X.utils.aoa_to_sheet(aoa); sheet['!cols'] = [{ wch: 9 }, { wch: 24 }, { wch: 14 }, ...dates.map(() => { return { wch: 14 }; })];
+    const help = X.utils.aoa_to_sheet([['Nasıl düzenlenir?'], ['Hücre biçimi: 08:45-16:45  (giriş-çıkış)'], ['Yalnızca giriş: 08:45-'], ['İzin: B yazın veya boş bırakın'],
+      ['Yeni kişi eklemek için Sicil, Ad Soyad ve Telefon yazın.'], ['İlk satırdaki tarih başlıklarını değiştirmeyin.'], ['Düzenlediğiniz dosyayı panelden "Düzenlenmiş Excel\'i yükle" ile geri yükleyin.']]);
+    const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, sheet, 'Vardiya'); X.utils.book_append_sheet(wb, help, 'Yardım');
+    X.writeFile(wb, `vardiya-${ws}.xlsx`);
+  } catch (e) { toast('İndirilemedi: ' + e.message); }
+}
+const headerDate = c => {
+  if (typeof c === 'number') return c > 30000 ? pDate(c) : null;
+  const m = String(c ?? '').match(/(\d{1,2})[./-](\d{1,2})[./-](\d{4})/); return m ? pDate(m[0]) : null;
+};
+async function importWeekXlsx(file) {
+  try {
+    const X = await loadXLSX(), wb = X.read(await file.arrayBuffer(), { type: 'array' });
+    const data = X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+    const hi = data.findIndex(r => r.some(c => norm(c).includes('sicil')));
+    if (hi < 0) return toast('"Sicil" başlığı bulunamadı. Panelden indirdiğiniz dosyayı kullanın.');
+    const H = data[hi], iS = H.findIndex(c => norm(c).includes('sicil')), iA = H.findIndex(c => norm(c).includes('ad')), iT = H.findIndex(c => norm(c).includes('tel'));
+    const dc = []; H.forEach((c, i) => { const d = headerDate(c); if (d) dc.push({ i, date: d }); });
+    if (!dc.length) return toast('Tarih başlıkları okunamadı (örn. "Pzt 19.10.2026"). Başlıkları değiştirmeyin.');
+    const cur = await fetchWeekMap(dc.map(x => x.date)), upd = [], offs = [], bad = [], skippedPeople = [];
+    for (const r of data.slice(hi + 1)) {
+      const sicil = cleanSicil(r[iS]); if (!sicil) continue;
+      const known = employees.find(e => e.sicil === sicil), ad = String(iA >= 0 ? r[iA] : '').trim() || known?.ad || '', tel = String(iT >= 0 ? r[iT] : '').trim() || known?.telefon || '';
+      if (!known && !ad) { skippedPeople.push(sicil); continue; }
+      for (const { i, date } of dc) {
+        let raw = r[i], t = typeof raw === 'number' ? (raw < 1 ? (pTime(raw) || '') + '-' : String(raw)) : String(raw ?? '').trim().replace(/[–—]/g, '-');
+        if (/^\d{1,2}[:.]\d{2}$/.test(t)) t += '-';
+        const v = parseCell(t, true), c = cur.get(date + '|' + sicil);
+        if (v === null) { bad.push(`${ad || sicil} ${fmtDate(date).slice(0, 5)}: "${t}"`); continue; }
+        if (v === 'off') { if (c?.giris || c?.cikis) offs.push({ date, sicil, ad, had: true }); else if (!c?.off) offs.push({ date, sicil, ad, mark: true }); continue; }
+        if (c && c.giris === v.giris && (c.cikis || null) === (v.cikis || null)) continue;
+        upd.push({ sicil, ad, tel, date, giris: v.giris, cikis: v.cikis });
+        if (!v.cikis && c?.cikis) offs.push({ date, sicil, types: ['cikis'] });
+      }
+    }
+    if (bad.length) return toast(`Geçersiz hücre: ${bad.slice(0, 3).join('; ')}${bad.length > 3 ? ` … (+${bad.length - 3})` : ''}. Düzeltip tekrar yükleyin.`);
+    if (!upd.length && !offs.length) return toast('Değişiklik yok.' + (skippedPeople.length ? ` (${skippedPeople.length} yeni kişinin adı eksik, atlandı)` : ''));
+    const del = offs.filter(o => o.had).length, mark = offs.filter(o => o.mark).length;
+    if (!confirm(`${upd.length} hücre eklenecek/güncellenecek, ${del} gün izin yapılacak (vardiya silinecek)${mark ? `, ${mark} izin günü işaretlenecek` : ''}${skippedPeople.length ? `, ${skippedPeople.length} kişi atlanacak (adı eksik)` : ''}. Sisteme aktarılsın mı?`)) return;
+    await saveShifts(upd, offs);
+    toast(`Excel aktarıldı: ${upd.length} güncelleme, ${del + mark} izin günü.`);
+    const first = dc.map(x => x.date).sort()[0];
+    if (!dc.some(x => x.date === selDate)) { selDate = first; $('#selDate').value = selDate; watchRows(); }
+    loadEditor();
+  } catch (e) { toast('Excel okunamadı: ' + e.message); }
 }
 
 /* --- Vardiya görselleri (Firestore'da küçültülmüş JPEG olarak; Storage ücretli olduğu için) --- */
@@ -647,7 +740,7 @@ function renderOcrPreview(res) {
       cells.forEach((c, i) => {
         const p = parseCell(c.value), date = dayDate(i);
         if (p === null) { c.classList.add('err'); bad++; }
-        else if (p === 'off') offs.push({ date, sicil });
+        else if (p === 'off') offs.push({ date, sicil, ad });
         else list.push({ sicil, ad, tel, date, ...p });
       });
     }

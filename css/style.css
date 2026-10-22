@@ -127,3 +127,25 @@ textarea{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);b
 .hello .chip{padding:6px 12px;font-size:13px;border-radius:10px}
 .ocr .cell.chg{background:#eaf2fd;border-color:#5b8fd6}
 @media(max-width:560px){#viewDash .cols{grid-template-columns:1fr}}
+
+.filebtn{cursor:pointer;display:inline-block}
+
+/* ---- Durum doğrudan çalışan satırında ---- */
+.dot.blue{background:#2f6fd0}
+.pill.blue{background:#e0ecff;color:#1d4ed8}
+#viewDash .row{border-radius:12px;padding:9px 12px;margin:5px 0;border-bottom:0}
+#viewDash .tm{display:inline-flex;align-items:center;padding:0;overflow:hidden;background:#fff;box-shadow:inset 0 0 0 1px #0000000f;border-radius:9px;font-weight:700}
+#viewDash .tm span,#viewDash .tm i{padding:4px 10px;font-style:normal}
+#viewDash .tm i.sep{padding:4px 0;color:#9aa5b1;font-weight:400}
+#viewDash .tm .adm{cursor:pointer}
+#viewDash .row.st-ok{background:#e4f4eb}
+#viewDash .row.st-ok .nm{color:#1b7447}
+#viewDash .row.st-ok .tg{background:#2f9e68;color:#fff}
+#viewDash .row.st-bad{background:#fdeae8}
+#viewDash .row.st-bad .nm{color:#b0372f}
+#viewDash .row.st-bad .tm{background:#d4564e;color:#fff;box-shadow:none}
+#viewDash .row.st-bad .sep{color:#ffd9d6}
+.izin-pill{background:#2f6fd0;color:#fff;font-weight:700;font-size:14px;border-radius:9px;padding:4px 14px;white-space:nowrap}
+#viewDash .col.izin{background:#eef4ff;grid-column:1/-1}
+#viewDash .col.izin h3::before{content:"●";color:#2f6fd0;font-size:10px}
+.badge.full{background:#e0ecff;color:#1d4ed8}
