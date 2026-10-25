@@ -149,3 +149,9 @@ textarea{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);b
 #viewDash .col.izin{background:#eef4ff;grid-column:1/-1}
 #viewDash .col.izin h3::before{content:"●";color:#2f6fd0;font-size:10px}
 .badge.full{background:#e0ecff;color:#1d4ed8}
+
+/* dokunulabilir saat */
+#viewDash .tm .tap,.hello .chip.tap{cursor:pointer}
+#viewDash .tm .tap:hover{background:#eaf2fd}
+#viewDash .row.st-ok .tm .tg.tap:hover{background:#278a59}
+.hello .chip.tap{box-shadow:0 0 0 2px #2f6fd055}

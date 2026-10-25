@@ -26,8 +26,8 @@ service cloud.firestore {
 
     // Onay sırasında token'ı taşıyan geçici belge (herkes yazabilir, yalnızca yönetici okur)
     match /confirms/{id} {
-      allow create: if request.resource.data.keys().hasOnly(['ctoken']);
-      allow read, update, delete: if isAdmin();
+      allow create, update: if request.resource.data.keys().hasOnly(['ctoken']);
+      allow read, delete: if isAdmin();
     }
 
     match /employees/{sicil} {

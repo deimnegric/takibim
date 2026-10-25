@@ -85,10 +85,12 @@ function renderHello() {
   if (!sc) { el.hidden = true; return; }
   const ad = me?.ad || staff?.ad || sc, g = mine.find(r => r.type === 'giris'), c = mine.find(r => r.type === 'cikis'), any = g || c;
   const full = g?.planned === '08:45' && c?.planned === '21:15', grp = any ? (full ? 'full' : g ? groupOf(g.planned) : 'aksam') : '';
-  const ch = (r, l) => { if (!r) return ''; const st = stateOf(r); return `<span class="chip ${st}">${l} ${r.planned} ${st === 'ok' ? '✓ onaylandı' : st === 'bad' ? '! bekleniyor' : '· zamanı gelmedi'}</span>`; };
+  const ch = (r, l) => { if (!r) return ''; const st = stateOf(r), tap = canTap(r);
+    return `<span class="chip ${st}${tap ? ' tap' : ''}" data-id="${esc(r.id)}">${l} ${r.planned} ${st === 'ok' ? '✓ onaylandı' : st === 'bad' ? '! bekleniyor' : '· zamanı gelmedi'}${tap ? ' · dokun' : ''}</span>`; };
+  const canSelf = !me && [g, c].some(r => r && canTap(r));
   el.hidden = false;
   el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz</small><h2>${esc(ad)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'full' ? 'Tam gün' : grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : mineOff ? '<span class="izin-pill">İzinli</span>' : ''}</div>` +
-    (any ? `<p class="hello-line">Bugünkü vardiyanız: <b>${g?.planned || '–'} – ${c?.planned || '–'}</b></p><div class="chips">${ch(g, 'Giriş')}${ch(c, 'Çıkış')}</div>`
+    (any ? `<p class="hello-line">Bugünkü vardiyanız: <b>${g?.planned || '–'} – ${c?.planned || '–'}</b></p><div class="chips">${ch(g, 'Giriş')}${ch(c, 'Çıkış')}</div>${canSelf ? '<p class="hint">Kalbim\'den işleminizi yaptıysanız saate dokunarak onaylayabilirsiniz.</p>' : ''}`
          : mineOff ? '<p class="hello-line">Bugün izinlisiniz.</p>' : '<p class="hello-line muted">Bugün için vardiya kaydınız yok (izinli olabilirsiniz).</p>');
 }
 
@@ -151,27 +153,43 @@ function renderDash() {
     `<span class="pill ok">Çıkış ${c.filter(r => r.confirmed).length}/${c.length}</span>` +
     (missed ? `<span class="pill bad">${missed} eksik</span>` : '');
 }
+/* Dokunma yetkisi: yönetici herkese, çalışan yalnızca bugünkü kendi onaylanmamış kaydına */
+const canTap = r => !!me || (!!staff?.sicil && r.sicil === staff.sicil && r.date === todayStr() && !r.confirmed);
 const seg = (r, cls) => {
   if (!r) return `<span class="${cls}">–</span>`;
-  const info = `${r.type === 'giris' ? 'Giriş' : 'Çıkış'} ${r.planned}: ${r.confirmed ? 'yapıldı' : 'bekleniyor'}` + (r.reminders ? ` • ${r.reminders} hatırlatma` : '') + (me ? ' — dokunarak onayla/geri al' : '');
-  return `<span class="${cls}${me ? ' adm' : ''}" data-id="${esc(r.id)}" title="${esc(info)}">${r.planned}</span>`;
+  const tap = canTap(r);
+  const info = `${r.type === 'giris' ? 'Giriş' : 'Çıkış'} ${r.planned}: ${r.confirmed ? 'yapıldı' : 'bekleniyor'}` + (r.reminders ? ` • ${r.reminders} hatırlatma` : '') + (me ? ' — dokunarak onayla/geri al' : tap ? ' — dokunarak onayla' : '');
+  return `<span class="${cls}${tap ? ' tap' : ''}" data-id="${esc(r.id)}" title="${esc(info)}">${r.planned}</span>`;
 };
 const workRow = p => `<div class="row ${rowClass(p)}"><span class="nm">${esc(p.ad)}</span><span class="tm">${seg(p.giris, 'tg')}<i class="sep">–</i>${seg(p.cikis, 'tc')}</span></div>`;
 const izinRow = o => `<div class="row"><span class="nm">${esc(o.ad)}</span><span class="izin-pill">İzinli</span></div>`;
 
-/* Yönetici: saate dokunarak giriş/çıkışı elle onayla veya geri al */
-$('#listWork').addEventListener('click', async e => {
-  const b = e.target.closest('.adm[data-id]'); if (!b || !me) return;
-  const r = rows.find(x => x.id === b.dataset.id); if (!r) return;
-  const msg = r.confirmed ? `${r.ad} – ${r.type === 'giris' ? 'giriş' : 'çıkış'} onayı geri alınsın mı?`
-    : `${r.ad} – ${r.type === 'giris' ? 'giriş' : 'çıkış'} manuel olarak onaylansın mı?`;
-  if (!confirm(msg)) return;
+/* Saate dokunarak onay: yönetici herkesi onaylar/geri alır; çalışan yalnızca kendini onaylar */
+async function onTapTime(e) {
+  const b = e.target.closest('.tap[data-id]'); if (!b) return;
+  const r = [...rows, ...mine].find(x => x.id === b.dataset.id); if (!r || !canTap(r)) return;
+  const lbl = r.type === 'giris' ? 'giriş' : 'çıkış';
+  if (me) {
+    if (!confirm(r.confirmed ? `${r.ad} – ${lbl} onayı geri alınsın mı?` : `${r.ad} – ${lbl} manuel olarak onaylansın mı?`)) return;
+    try {
+      await updateDoc(doc(db, 'attendance', r.id), r.confirmed
+        ? { confirmed: false, confirmedAt: null, confirmedBy: null }
+        : { confirmed: true, confirmedAt: serverTimestamp(), confirmedBy: 'yonetici' });
+    } catch (err) { toast('Kaydedilemedi: ' + err.message); }
+    return;
+  }
+  if (!staff?.token) return toast('Onay için yöneticinin bir kez giriş yapıp listeyi güncellemesi gerekiyor.');
+  if (!confirm(`${r.planned} ${lbl === 'giriş' ? 'girişinizi' : 'çıkışınızı'} kalbim uygulamasından yaptığınızı onaylıyor musunuz?`)) return;
   try {
-    await updateDoc(doc(db, 'attendance', r.id), r.confirmed
-      ? { confirmed: false, confirmedAt: null, confirmedBy: null }
-      : { confirmed: true, confirmedAt: serverTimestamp(), confirmedBy: 'yonetici' });
-  } catch (err) { toast('Kaydedilemedi: ' + err.message); }
-});
+    const bt = writeBatch(db);
+    bt.set(doc(db, 'confirms', r.id), { ctoken: staff.token });
+    bt.update(doc(db, 'attendance', r.id), { confirmed: true, confirmedAt: serverTimestamp(), confirmedBy: 'calisan' });
+    await bt.commit();
+    toast(`${lbl === 'giriş' ? 'Giriş' : 'Çıkış'} onaylandı, teşekkürler.`);
+  } catch (err) { toast('Onaylanamadı. Bağlantınızı kontrol edin ya da yöneticinize bildirin.'); }
+}
+$('#listWork').addEventListener('click', onTapTime);
+$('#hello').addEventListener('click', onTapTime);
 
 $('#selDate').value = selDate;
 $('#selDate').onchange = e => { if (e.target.value) { selDate = e.target.value; watchRows(); } };
@@ -212,7 +230,7 @@ $('#frmStaff').addEventListener('submit', async e => {
   try {
     const r = await getDoc(doc(db, 'roster', sc));
     if (!r.exists()) { $('#inStaff').value = ''; err.textContent = 'Sicil bulunamadı.'; return; }
-    staff = { sicil: sc, ad: r.data().ad || sc };
+    staff = { sicil: sc, ad: r.data().ad || sc, token: r.data().token || '' };
     try { localStorage.setItem('takip_staff', JSON.stringify(staff)); } catch { }
     $('#inStaff').value = ''; startData(); applyView();
   } catch { err.textContent = 'Bağlantı hatası, tekrar deneyin.'; }
@@ -223,7 +241,7 @@ async function restoreStaff() {
   if (c?.sicil) {
     try {
       const r = await getDoc(doc(db, 'roster', c.sicil));
-      if (r.exists()) staff = { sicil: c.sicil, ad: r.data().ad || c.ad };
+      if (r.exists()) staff = { sicil: c.sicil, ad: r.data().ad || c.ad, token: r.data().token || '' };
       else try { localStorage.removeItem('takip_staff'); } catch { }
     } catch { staff = c; }      // çevrimdışı: kayıtlı oturumla devam
   }
@@ -251,7 +269,7 @@ onAuthStateChanged(auth, async u => {
       const sn = await getDoc(doc(db, 'employees', sicil));
       if (sn.exists() && sn.data().isAdmin) {
         me = { sicil, ...sn.data() };
-        await loadSettings(); await loadRoster(); watchEmployees(); adminOpen = true;
+        await loadSettings(); await loadRoster(); watchEmployees(); adminOpen = false;   // önce pano açılır, yönetim 'Yönetim' butonuyla
       } else { await signOut(auth); toast('Bu hesap yönetici değil.'); return; }
     } catch (e) { await signOut(auth); toast('Yetki kontrolü başarısız.'); return; }
   } else adminOpen = false;
@@ -261,16 +279,26 @@ onAuthStateChanged(auth, async u => {
 /* roster: giriş ekranının okuyabildiği herkese açık, yalnızca {ad} içeren liste (telefon/token YOK) */
 async function loadRoster() {
   rosterCache = new Map();
-  try { (await getDocs(collection(db, 'roster'))).forEach(d => rosterCache.set(d.id, d.data().ad)); } catch (e) { toast('Roster okunamadı: ' + e.message); }
+  try { (await getDocs(collection(db, 'roster'))).forEach(d => rosterCache.set(d.id, { ad: d.data().ad, token: d.data().token || '' })); } catch (e) { toast('Roster okunamadı: ' + e.message); }
 }
+let rosterBusy = false, rosterAgain = false;
 async function syncRoster() {
   if (!me || !rosterCache) return;
-  const bt = writeBatch(db); let n = 0; const want = new Map();
-  for (const e of employees) if (e.aktif !== false && e.ad) want.set(e.sicil, e.ad);
-  for (const [sc, ad] of want) if (rosterCache.get(sc) !== ad) { bt.set(doc(db, 'roster', sc), { ad }); n++; }
-  for (const sc of rosterCache.keys()) if (!want.has(sc)) { bt.delete(doc(db, 'roster', sc)); n++; }
-  if (!n) return;
-  try { await bt.commit(); rosterCache = new Map(want); } catch (e) { toast('Roster güncellenemedi: ' + e.message); }
+  if (rosterBusy) { rosterAgain = true; return; }
+  rosterBusy = true;
+  try {
+    const bt = writeBatch(db); let n = 0; const want = new Map();
+    for (const e of employees) {
+      if (e.aktif === false || !e.ad) continue;
+      let token = e.token;
+      if (!token) { token = newToken(); bt.update(doc(db, 'employees', e.sicil), { token }); n++; }     // tokensız çalışanlara anahtar üret
+      want.set(e.sicil, { ad: e.ad, token });
+    }
+    for (const [sc, v] of want) { const c = rosterCache.get(sc); if (!c || c.ad !== v.ad || c.token !== v.token) { bt.set(doc(db, 'roster', sc), v); n++; } }
+    for (const sc of rosterCache.keys()) if (!want.has(sc)) { bt.delete(doc(db, 'roster', sc)); n++; }
+    if (n) { await bt.commit(); rosterCache = new Map(want); }
+  } catch (e) { toast('Roster güncellenemedi: ' + e.message); }
+  finally { rosterBusy = false; if (rosterAgain) { rosterAgain = false; syncRoster(); } }
 }
 
 async function loadSettings() {
