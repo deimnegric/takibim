@@ -22,6 +22,26 @@ const tel10 = t => String(t ?? '').replace(/\D/g, '').slice(-10);
 const newToken = () => [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
 const emailOf = sicil => `${sicil}@bimtakip.app`;
 
+/* ---- Roller: MS (kırmızı), MSY (mor), GT (turuncu), personel (mavi) ---- */
+const ROLES = { ms: { t: 'MS', rank: 0 }, msy: { t: 'MSY', rank: 0 }, gt: { t: 'GT', rank: 1 }, per: { t: 'PER', rank: 2 } };
+const fold = s => String(s ?? '').replace(/İ/g, 'i').replace(/I/g, 'i').replace(/ı/g, 'i').toLowerCase()
+  .replace(/ş/g, 's').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ö/g, 'o').replace(/ç/g, 'c').replace(/\s+/g, ' ').trim();
+const ORDER_NAMES = ['gonul', 'dilara', 'rafi', 'selcuk', 'kubra', 'medine'];     // diğer personelin sırası
+function guessRole(ad) {                                                         // rol yazılmamış kişiler için isme göre varsayılan
+  const n = fold(ad), first = n.split(' ')[0];
+  if (first === 'huseyin') return { rol: 'ms', sira: 0 };
+  if (first === 'turgay') return { rol: 'msy', sira: 0 };
+  if (n.startsWith('mehmet emin')) return { rol: 'gt', sira: 0 };
+  const i = ORDER_NAMES.indexOf(first);
+  return { rol: 'per', sira: i >= 0 ? i + 1 : 99 };
+}
+let metaMap = new Map(), unsubMeta = null;                                       // sicil -> {r: rol, s: sıra}
+const setMeta = o => { metaMap = new Map(Object.entries(o || {})); };
+const roleOf = sc => (ROLES[metaMap.get(sc)?.r] ? metaMap.get(sc).r : 'per');
+const rankOf = sc => ROLES[roleOf(sc)].rank;
+const cmpPeople = (a, b) => rankOf(a.sicil) - rankOf(b.sicil) || (metaMap.get(a.sicil)?.s ?? 99) - (metaMap.get(b.sicil)?.s ?? 99) || (a.ad || '').localeCompare(b.ad || '', 'tr');
+const roleTag = sc => `<span class="rtag r-${roleOf(sc)}">${ROLES[roleOf(sc)].t}</span>`;
+
 const DEF = { girisOnce: 14, girisSonra: 15, cikisOnce: 15, cikisSonra: 15, aralik: 5 };
 // Sabahçı: yalnızca girişi tam 08:45 olanlar. Diğer tüm girişler (10:45, 11:15, 14:15…) akşamcı sayılır.
 const SABAH_GIRIS = '08:45';
@@ -58,6 +78,7 @@ function watchRows() {
   unsubRows = onSnapshot(query(collection(db, 'attendance'), where('date', '==', selDate)),
     snap => { rows = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderDash(); },
     err => toast('Veri okunamadı: ' + err.message));
+  watchMine();                                   // üstteki kişisel vardiya kartı da seçili güne geçer
   unsubOff?.(); offRows = [];
   unsubOff = onSnapshot(query(collection(db, 'offdays'), where('date', '==', selDate)),
     snap => { offRows = snap.docs.map(d => d.data()); renderDash(); }, () => { });
@@ -70,14 +91,19 @@ async function watchWeek() {
 }
 function watchMine() {
   unsubMine?.(); unsubMine = null; mine = []; mineOff = false; curToday = todayStr();
-  const sc = mySicil(); if (!sc) return renderHello();
-  getDoc(doc(db, 'offdays', `${curToday}_${sc}`)).then(d => { mineOff = d.exists(); renderHello(); }).catch(() => { });
-  unsubMine = onSnapshot(query(collection(db, 'attendance'), where('sicil', '==', sc), where('date', '==', curToday)),
+  const sc = mySicil(), day = selDate; if (!sc) return renderHello();
+  getDoc(doc(db, 'offdays', `${day}_${sc}`)).then(d => { if (day === selDate) { mineOff = d.exists(); renderHello(); } }).catch(() => { });
+  unsubMine = onSnapshot(query(collection(db, 'attendance'), where('sicil', '==', sc), where('date', '==', day)),
     snap => { mine = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderHello(); }, () => renderHello());
 }
 function startData() {
-  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubOff?.(); unsubRows = unsubMine = unsubOff = null; rows = []; mine = []; offRows = []; weekDoc = null; return; }
-  watchRows(); watchMine();
+  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubOff?.(); unsubMeta?.(); unsubRows = unsubMine = unsubOff = unsubMeta = null; rows = []; mine = []; offRows = []; weekDoc = null; return; }
+  watchRows(); watchMeta();
+}
+function watchMeta() {
+  unsubMeta?.(); unsubMeta = null;
+  if (!authorized()) return;
+  unsubMeta = onSnapshot(doc(db, 'meta', 'people'), d => { if (me) return; setMeta(d.exists() ? d.data().p : {}); renderDash(); renderHello(); }, () => { });
 }
 
 function renderHello() {
@@ -88,10 +114,11 @@ function renderHello() {
   const ch = (r, l) => { if (!r) return ''; const st = stateOf(r), tap = canTap(r);
     return `<span class="chip ${st}${tap ? ' tap' : ''}" data-id="${esc(r.id)}">${l} ${r.planned} ${st === 'ok' ? '✓ onaylandı' : st === 'bad' ? '! bekleniyor' : '· zamanı gelmedi'}${tap ? ' · dokun' : ''}</span>`; };
   const canSelf = !me && [g, c].some(r => r && canTap(r));
+  const isTd = selDate === todayStr(), dayLbl = isTd ? 'Bugünkü' : fmtDate(selDate);
   el.hidden = false;
-  el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz</small><h2>${esc(ad)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'full' ? 'Tam gün' : grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : mineOff ? '<span class="izin-pill">İzinli</span>' : ''}</div>` +
-    (any ? `<p class="hello-line">Bugünkü vardiyanız: <b>${g?.planned || '–'} – ${c?.planned || '–'}</b></p><div class="chips">${ch(g, 'Giriş')}${ch(c, 'Çıkış')}</div>${canSelf ? '<p class="hint">Kalbim\'den işleminizi yaptıysanız saate dokunarak onaylayabilirsiniz.</p>' : ''}`
-         : mineOff ? '<p class="hello-line">Bugün izinlisiniz.</p>' : '<p class="hello-line muted">Bugün için vardiya kaydınız yok (izinli olabilirsiniz).</p>');
+  el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz</small><h2>${esc(ad)} ${roleTag(sc)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'full' ? 'Tam gün' : grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : mineOff ? '<span class="izin-pill">İzinli</span>' : ''}</div>` +
+    (any ? `<p class="hello-line">${dayLbl} vardiyanız: <b>${g?.planned || '–'} – ${c?.planned || '–'}</b></p><div class="chips">${ch(g, 'Giriş')}${ch(c, 'Çıkış')}</div>${canSelf ? '<p class="hint">Kalbim\'den işleminizi yaptıysanız saate dokunarak onaylayabilirsiniz.</p>' : ''}`
+         : mineOff ? `<p class="hello-line">${isTd ? 'Bugün' : dayLbl} izinlisiniz.</p>` : `<p class="hello-line muted">${isTd ? 'Bugün' : dayLbl} için vardiya kaydınız yok (izinli olabilirsiniz).</p>`);
 }
 
 function renderWeek() {
@@ -112,8 +139,7 @@ function people() {
     p[r.type] = r;
     if (r.type === 'giris') p.group = groupOf(r.planned);
   }
-  return [...m.values()].sort((a, b) =>
-    ((a.giris?.planned || a.cikis?.planned || '99') + a.ad).localeCompare((b.giris?.planned || b.cikis?.planned || '99') + b.ad, 'tr'));
+  return [...m.values()].sort(cmpPeople);          // MS/MSY, GT, sonra belirlenen personel sırası
 }
 
 const stateOf = r => !r ? 'none' : r.confirmed ? 'ok' : Date.now() < r.windowStart ? 'wait' : 'bad';
@@ -141,7 +167,7 @@ function renderDash() {
   $('#ttlWork').textContent = isToday ? 'Bugün Çalışanlar' : `Çalışanlar – ${fmtDate(selDate)}`;
   const ps = people();
   const sabah = ps.filter(p => p.group !== 'aksam'), aksam = ps.filter(p => p.group === 'aksam' || isFull(p));   // 08:45-21:15 olanlar iki listede
-  const izin = offRows.filter(o => !ps.some(p => p.sicil === o.sicil)).sort((a, b) => (a.ad || '').localeCompare(b.ad || '', 'tr'));
+  const izin = offRows.filter(o => !ps.some(p => p.sicil === o.sicil)).sort(cmpPeople);
   $('#listWork').innerHTML = col('Sabahçılar', sabah, workRow, 'sabah') + col('Akşamcılar', aksam, workRow, 'aksam') +
     (izin.length ? col('İzinliler', izin, izinRow, 'izin') : '');
 
@@ -161,8 +187,8 @@ const seg = (r, cls) => {
   const info = `${r.type === 'giris' ? 'Giriş' : 'Çıkış'} ${r.planned}: ${r.confirmed ? 'yapıldı' : 'bekleniyor'}` + (r.reminders ? ` • ${r.reminders} hatırlatma` : '') + (me ? ' — dokunarak onayla/geri al' : tap ? ' — dokunarak onayla' : '');
   return `<span class="${cls}${tap ? ' tap' : ''}" data-id="${esc(r.id)}" title="${esc(info)}">${r.planned}</span>`;
 };
-const workRow = p => `<div class="row ${rowClass(p)}"><span class="nm">${esc(p.ad)}</span><span class="tm">${seg(p.giris, 'tg')}<i class="sep">–</i>${seg(p.cikis, 'tc')}</span></div>`;
-const izinRow = o => `<div class="row"><span class="nm">${esc(o.ad)}</span><span class="izin-pill">İzinli</span></div>`;
+const workRow = p => `<div class="row ${rowClass(p)} rl-${roleOf(p.sicil)}"><span class="nm">${roleTag(p.sicil)}${esc(p.ad)}</span><span class="tm">${seg(p.giris, 'tg')}<i class="sep">–</i>${seg(p.cikis, 'tc')}</span></div>`;
+const izinRow = o => `<div class="row rl-${roleOf(o.sicil)}"><span class="nm">${roleTag(o.sicil)}${esc(o.ad)}</span><span class="izin-pill">İzinli</span></div>`;
 
 /* Saate dokunarak onay: yönetici herkesi onaylar/geri alır; çalışan yalnızca kendini onaylar */
 async function onTapTime(e) {
@@ -194,6 +220,7 @@ $('#hello').addEventListener('click', onTapTime);
 $('#selDate').value = selDate;
 $('#selDate').onchange = e => { if (e.target.value) { selDate = e.target.value; watchRows(); } };
 $('#btnToday').onclick = () => { selDate = todayStr(); $('#selDate').value = selDate; watchRows(); };
+$('#btnNext').onclick = () => { selDate = addDays(selDate, 1); $('#selDate').value = selDate; watchRows(); };
 
 /* ---------- Giriş / başlık ---------- */
 function applyView() {
@@ -281,22 +308,27 @@ async function loadRoster() {
   rosterCache = new Map();
   try { (await getDocs(collection(db, 'roster'))).forEach(d => rosterCache.set(d.id, { ad: d.data().ad, token: d.data().token || '' })); } catch (e) { toast('Roster okunamadı: ' + e.message); }
 }
-let rosterBusy = false, rosterAgain = false;
+let rosterBusy = false, rosterAgain = false, metaCache = '';
 async function syncRoster() {
   if (!me || !rosterCache) return;
   if (rosterBusy) { rosterAgain = true; return; }
   rosterBusy = true;
   try {
-    const bt = writeBatch(db); let n = 0; const want = new Map();
+    const bt = writeBatch(db); let n = 0; const want = new Map(), meta = {};
     for (const e of employees) {
       if (e.aktif === false || !e.ad) continue;
-      let token = e.token;
-      if (!token) { token = newToken(); bt.update(doc(db, 'employees', e.sicil), { token }); n++; }     // tokensız çalışanlara anahtar üret
+      let token = e.token; const upd = {}, g = guessRole(e.ad);
+      if (!token) { token = newToken(); upd.token = token; }                    // tokensız çalışanlara anahtar üret
+      if (!e.rol) { upd.rol = g.rol; upd.sira = g.sira; }                       // rolü yazılmamışlara isme göre varsayılan
+      if (Object.keys(upd).length) { bt.update(doc(db, 'employees', e.sicil), upd); n++; }
       want.set(e.sicil, { ad: e.ad, token });
+      meta[e.sicil] = { r: e.rol || g.rol, s: e.sira ?? g.sira };
     }
+    const metaJson = JSON.stringify(Object.fromEntries(Object.keys(meta).sort().map(k => [k, meta[k]])));
+    if (metaJson !== metaCache) { bt.set(doc(db, 'meta', 'people'), { p: JSON.parse(metaJson) }); n++; }
     for (const [sc, v] of want) { const c = rosterCache.get(sc); if (!c || c.ad !== v.ad || c.token !== v.token) { bt.set(doc(db, 'roster', sc), v); n++; } }
     for (const sc of rosterCache.keys()) if (!want.has(sc)) { bt.delete(doc(db, 'roster', sc)); n++; }
-    if (n) { await bt.commit(); rosterCache = new Map(want); }
+    if (n) { await bt.commit(); rosterCache = new Map(want); metaCache = metaJson; }
   } catch (e) { toast('Roster güncellenemedi: ' + e.message); }
   finally { rosterBusy = false; if (rosterAgain) { rosterAgain = false; syncRoster(); } }
 }
@@ -306,8 +338,10 @@ async function loadSettings() {
 }
 function watchEmployees() {
   unsubEmp = onSnapshot(collection(db, 'employees'), snap => {
-    employees = snap.docs.map(d => ({ sicil: d.id, ...d.data() })).sort((a, b) => (a.ad || '').localeCompare(b.ad || '', 'tr'));
-    renderEmpList(); renderAdminList(); syncRoster();
+    const raw = snap.docs.map(d => ({ sicil: d.id, ...d.data() }));
+    metaMap = new Map(raw.map(e => { const g = guessRole(e.ad); return [e.sicil, { r: e.rol || g.rol, s: e.sira ?? g.sira }]; }));
+    employees = raw.sort(cmpPeople);
+    renderEmpList(); renderAdminList(); renderDash(); renderHello(); syncRoster();
   }, err => toast('Çalışanlar okunamadı: ' + err.message));
 }
 
@@ -541,7 +575,7 @@ async function loadEditor() {
     const m = new Map();
     snap.forEach(d => { const r = d.data(); let p = m.get(r.sicil); if (!p) { p = { sicil: r.sicil, ad: r.ad, cells: Array(7).fill(null) }; m.set(r.sicil, p); }
       const i = dates.indexOf(r.date); p.cells[i] ??= {}; p.cells[i][r.type] = r.planned; });
-    const list = [...m.values()].sort((a, b) => (a.ad || '').localeCompare(b.ad || '', 'tr'));
+    const list = [...m.values()].sort(cmpPeople);
     renderEditor(ws, dates, list);
   } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
@@ -552,7 +586,7 @@ function renderEditor(ws, dates, list) {
   const addable = () => employees.filter(e => !list.some(p => p.sicil === e.sicil) && e.aktif !== false);
   const draw = () => {
     out.innerHTML = `<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
-      list.map((p, ri) => `<tr data-r="${ri}"><td><b>${esc(p.ad)}</b><br><small class="hint">${esc(p.sicil)}</small></td>${
+      list.map((p, ri) => `<tr data-r="${ri}"><td><b>${roleTag(p.sicil)}${esc(p.ad)}</b><br><small class="hint">${esc(p.sicil)}</small></td>${
         p.cells.map(c => { const t = cellTxt(c); return `<td><input class="cell ${t === 'B' ? 'off' : ''}" value="${t === 'B' ? '' : esc(t)}" data-orig="${t === 'B' ? '' : esc(t)}" placeholder="B"></td>`; }).join('')}</tr>`).join('') ||
       `<tr><td colspan="8" class="empty">Bu hafta için kayıt yok. Aşağıdan kişi ekleyip saat girebilirsiniz.</td></tr>`}</tbody></table></div>
       <div class="rowbtn"><select id="edAdd" style="max-width:260px"><option value="">+ Kişi ekle…</option>${addable().map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('')}</select>
@@ -602,7 +636,7 @@ async function exportWeekXlsx() {
     const ws = mondayOf(wk), dates = [...Array(7)].map((_, i) => addDays(ws, i)), X = await loadXLSX(), cur = await fetchWeekMap(dates);
     const bySic = new Map(); employees.filter(e => e.aktif !== false).forEach(e => bySic.set(e.sicil, { ad: e.ad, tel: e.telefon || '' }));
     for (const k of cur.keys()) { const sc = k.split('|')[1]; if (!bySic.has(sc)) bySic.set(sc, { ad: cur.get(k).ad, tel: '' }); }
-    const list = [...bySic].sort((a, b) => (a[1].ad || '').localeCompare(b[1].ad || '', 'tr'));
+    const list = [...bySic].sort((a, b) => cmpPeople({ sicil: a[0], ad: a[1].ad }, { sicil: b[0], ad: b[1].ad }));
     const aoa = [['Sicil', 'Ad Soyad', 'Telefon', ...dates.map((d, i) => `${DN3[i]} ${fmtDate(d)}`)]];
     for (const [sc, e] of list) aoa.push([sc, e.ad, e.tel, ...dates.map(d => { const c = cur.get(d + '|' + sc); return c && (c.giris || c.cikis) ? `${c.giris || ''}-${c.cikis || ''}` : 'B'; })]);
     const sheet = X.utils.aoa_to_sheet(aoa); sheet['!cols'] = [{ wch: 9 }, { wch: 24 }, { wch: 14 }, ...dates.map(() => { return { wch: 14 }; })];
@@ -792,10 +826,12 @@ function tabCalisan(b) {
       <label>Sicil No<input id="eSicil" required></label>
       <label>Ad Soyad<input id="eAd" required></label>
       <label>Telefon<input id="eTel" inputmode="tel" placeholder="05xx xxx xx xx"></label>
+      <label>Rol<select id="eRol"><option value="">Otomatik (isme göre)</option><option value="ms">MS</option><option value="msy">MSY</option><option value="gt">GT</option><option value="per">Personel</option></select></label>
+      <label>Sıra (personel için)<input id="eSira" type="number" min="0" max="99" placeholder="1, 2, 3…"></label>
       <button class="btn">Kaydet</button>
     </form></div>
   <div class="card"><h2>Toplu Ekle</h2>
-    <p class="hint">Her satıra bir kişi: <b>sicil;ad soyad;telefon</b> (Excel'den kopyalayıp yapıştırırsanız sekme ayracı da kabul edilir).</p>
+    <p class="hint">Her satıra bir kişi: <b>sicil;ad soyad;telefon;rol</b> (rol isteğe bağlı: ms, msy, gt veya per; boşsa isme göre atanır). Excel'den kopyalayıp yapıştırırsanız sekme ayracı da kabul edilir.</p>
     <textarea id="bulk" rows="5" placeholder="1001;Ayşe Yılmaz;05321234567"></textarea>
     <div class="rowbtn"><button class="btn" id="btnBulk">Ekle / Güncelle</button></div></div>
   <div class="card"><h2>Çalışanlar</h2><input id="eSearch" placeholder="Ara…"><div class="tw" id="empList"></div>
@@ -806,18 +842,22 @@ function tabCalisan(b) {
     const data = { sicil, ad: $('#eAd').value.trim(), telefon: $('#eTel').value.trim(), tel10: tel10($('#eTel').value), aktif: true };
     if (!cur) Object.assign(data, { isAdmin: false, notify: false });
     if (!cur?.token) data.token = newToken();
+    if ($('#eRol').value) data.rol = $('#eRol').value;
+    if ($('#eSira').value !== '') data.sira = Math.max(0, Math.min(99, +$('#eSira').value || 0));
+    if (data.rol && data.sira === undefined && !cur?.rol) data.sira = guessRole(data.ad).sira;
     try { await setDoc(doc(db, 'employees', sicil), data, { merge: true }); e.target.reset(); toast('Kaydedildi.'); } catch (err) { toast(err.message); }
   };
   $('#btnBulk').onclick = async () => {
     const lines = $('#bulk').value.split(/\n/).map(l => l.split(/[;\t]/).map(x => x.trim())).filter(a => a[0]);
     if (!lines.length) return toast('Satır yok.');
     const bt = writeBatch(db); let n = 0;
-    for (const [sc, ad, tel] of lines) {
+    for (const [sc, ad, tel, rl] of lines) {
       const sicil = cleanSicil(sc); if (!sicil || !ad) continue;
       const cur = employees.find(x => x.sicil === sicil);
       const d = { sicil, ad, telefon: tel || '', tel10: tel10(tel), aktif: true };
       if (!cur) Object.assign(d, { isAdmin: false, notify: false });
       if (!cur?.token) d.token = newToken();
+      if (ROLES[fold(rl)]) { d.rol = fold(rl); if (!cur?.rol) d.sira = guessRole(ad).sira; }
       bt.set(doc(db, 'employees', sicil), d, { merge: true }); n++;
     }
     try { await bt.commit(); $('#bulk').value = ''; toast(`${n} çalışan kaydedildi.`); } catch (err) { toast(err.message); }
@@ -829,10 +869,17 @@ function renderEmpList() {
   const el = $('#empList'); if (!el) return;
   const q = norm($('#eSearch')?.value || '');
   const list = employees.filter(e => !q || norm(e.ad + e.sicil + e.telefon).includes(q));
-  el.innerHTML = `<table><tr><th>Sicil</th><th>Ad</th><th>Telefon</th><th>Bot</th><th></th></tr>${
-    list.map(e => `<tr><td>${esc(e.sicil)}</td><td>${esc(e.ad)}${e.isAdmin ? ' <span class="tag">yönetici</span>' : ''}</td><td>${esc(e.telefon)}</td>
+  const rsel = e => `<select class="rsel r-${roleOf(e.sicil)}" data-rol="${esc(e.sicil)}">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}"${roleOf(e.sicil) === k ? ' selected' : ''}>${v.t}</option>`).join('')}</select>`;
+  el.innerHTML = `<table><tr><th>Sicil</th><th>Ad</th><th>Rol</th><th>Sıra</th><th>Telefon</th><th>Bot</th><th></th></tr>${
+    list.map(e => `<tr><td>${esc(e.sicil)}</td><td>${roleTag(e.sicil)}${esc(e.ad)}${e.isAdmin ? ' <span class="tag">yönetici</span>' : ''}</td><td>${rsel(e)}</td>
+    <td><input class="sira-in" type="number" min="0" max="99" value="${metaMap.get(e.sicil)?.s ?? 99}" data-sira="${esc(e.sicil)}"></td><td>${esc(e.telefon)}</td>
     <td>${e.telegramChatId ? '<span class="tag ok">bağlı</span>' : '<span class="tag">yok</span>'}</td>
     <td><button class="btn light small" data-ed="${esc(e.sicil)}">Düzenle</button> <button class="btn danger small" data-del="${esc(e.sicil)}">Sil</button></td></tr>`).join('')}</table>`;
+  el.onchange = async ev => {
+    const t = ev.target;
+    if (t.dataset.rol) await updateDoc(doc(db, 'employees', t.dataset.rol), { rol: t.value }).catch(x => toast(x.message));
+    if (t.dataset.sira) await updateDoc(doc(db, 'employees', t.dataset.sira), { sira: Math.max(0, Math.min(99, +t.value || 0)) }).catch(x => toast(x.message));
+  };
   el.onclick = async ev => {
     const ed = ev.target.dataset.ed, del = ev.target.dataset.del;
     if (ed) {

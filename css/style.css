@@ -155,3 +155,17 @@ textarea{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);b
 #viewDash .tm .tap:hover{background:#eaf2fd}
 #viewDash .row.st-ok .tm .tg.tap:hover{background:#278a59}
 .hello .chip.tap{box-shadow:0 0 0 2px #2f6fd055}
+
+/* ---- Rol renkleri: MS kırmızı, MSY mor, GT turuncu, personel mavi ---- */
+.rtag{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.05em;border-radius:5px;padding:1px 6px;margin-right:7px;vertical-align:middle;color:#fff;line-height:1.5}
+.r-ms.rtag{background:#d64545}.r-msy.rtag{background:#8b5cf6}.r-gt.rtag{background:#f08a24}.r-per.rtag{background:#3b82d6}
+#viewDash .row{border-left:4px solid transparent}
+#viewDash .row.rl-ms{border-left-color:#d64545}
+#viewDash .row.rl-msy{border-left-color:#8b5cf6}
+#viewDash .row.rl-gt{border-left-color:#f08a24}
+#viewDash .row.rl-per{border-left-color:#3b82d6}
+.hello h2 .rtag{font-size:11px;margin-left:6px}
+.rsel{width:auto;padding:4px 6px;font-weight:700;border-width:2px}
+.rsel.r-ms{border-color:#d64545;color:#b83232}.rsel.r-msy{border-color:#8b5cf6;color:#6d3fd1}
+.rsel.r-gt{border-color:#f08a24;color:#c46a10}.rsel.r-per{border-color:#3b82d6;color:#2563b0}
+.sira-in{width:64px;padding:4px 6px}
