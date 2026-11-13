@@ -4,7 +4,7 @@ import { getFirestore, collection, doc, query, where, onSnapshot, getDocs, getDo
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { parseGrid, matchEmployee, parseCell } from "./ocr-parse.js";
+import { parseCell } from "./ocr-parse.js";
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -364,70 +364,6 @@ const loadXLSX = () => xlsxP ||= new Promise((res, rej) => {
 const norm = s => String(s ?? '').replace(/[İI]/g, 'i').replace(/ı/g, 'i').toLowerCase()
   .replace(/ş/g, 's').replace(/ğ/g, 'g').replace(/ü/g, 'u').replace(/ö/g, 'o').replace(/ç/g, 'c').replace(/\s+/g, ' ').trim();
 
-function pTime(v) {
-  if (v === '' || v == null) return null;
-  let h, m;
-  if (typeof v === 'number') {
-    if (v < 1) { const t = Math.round(v * 1440); h = Math.floor(t / 60) % 24; m = t % 60; }
-    else if (v < 24) { h = Math.floor(v); m = Math.round((v % 1) * 100); }
-    else return null;
-  } else {
-    const x = String(v).trim().replace(/[.,]/g, ':').match(/^(\d{1,2}):(\d{2})/);
-    if (!x) return null; h = +x[1]; m = +x[2];
-  }
-  if (h > 23 || m > 59) return null;
-  return `${pad(h)}:${pad(m)}`;
-}
-function pDate(v) {
-  if (v === '' || v == null) return null;
-  if (typeof v === 'number') {
-    const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 864e5);
-    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-  }
-  const s = String(v).trim();
-  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (m) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
-  m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/);
-  if (m) { let y = +m[3]; if (y < 100) y += 2000; return `${y}-${pad(m[2])}-${pad(m[1])}`; }
-  return null;
-}
-
-async function parseExcel(file) {
-  const X = await loadXLSX();
-  const wb = X.read(await file.arrayBuffer(), { type: 'array' });
-  const out = []; let skipped = 0;
-  for (const name of wb.SheetNames) {
-    const data = X.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' });
-    const hi = data.findIndex(r => r.some(c => norm(c).includes('sicil')));
-    if (hi < 0) continue;
-    const H = data[hi].map(norm);
-    const find = f => H.findIndex(f);
-    const ix = {
-      sicil: find(h => h.includes('sicil')),
-      ad: find(h => h === 'ad' || h.includes('ad soyad') || h.includes('adi soyadi') || h.includes('isim') || h.includes('personel')),
-      tel: find(h => h.includes('tel') || h.includes('gsm')),
-      tarih: find(h => h.includes('tarih')),
-      giris: find(h => h.includes('giris') || h.includes('baslangic')),
-      cikis: find(h => h.includes('cikis') || h.includes('bitis')),
-      vardiya: find(h => h.includes('vardiya') || h === 'saat' || h.includes('mesai'))
-    };
-    if (ix.tarih < 0) throw new Error('"Tarih" sütunu bulunamadı.');
-    for (const r of data.slice(hi + 1)) {
-      const sicil = cleanSicil(r[ix.sicil]); if (!sicil) continue;
-      const date = pDate(r[ix.tarih]);
-      let giris = ix.giris >= 0 ? pTime(r[ix.giris]) : null, cikis = ix.cikis >= 0 ? pTime(r[ix.cikis]) : null;
-      if (!giris && ix.vardiya >= 0) {
-        const m = String(r[ix.vardiya]).match(/(\d{1,2}[:.]\d{2})\s*[-–—]\s*(\d{1,2}[:.]\d{2})/);
-        if (m) { giris = pTime(m[1]); cikis = pTime(m[2]); }
-      }
-      if (!date || !giris) { skipped++; continue; }
-      out.push({ sicil, ad: String(ix.ad >= 0 ? r[ix.ad] : '').trim() || sicil, tel: String(ix.tel >= 0 ? r[ix.tel] : '').trim(), date, giris, cikis });
-    }
-  }
-  return { rows: out, skipped };
-}
-
-
 async function saveShifts(list, offs = []) {
   const dates = [...new Set([...list, ...offs].map(r => r.date))];
   const existing = new Set();
@@ -479,63 +415,23 @@ async function saveShifts(list, offs = []) {
 
 function tabVardiya(b) {
   b.innerHTML = `
-  <div class="card"><h2>Vardiya Yükle (Excel)</h2>
-    <p class="hint">Sütunlar: <b>Sicil, Ad Soyad, Telefon, Tarih, Giriş, Çıkış</b> (ya da "Vardiya" sütununda 08:45-17:45). Aynı gün tekrar yüklenirse onaylar silinmez.</p>
-    <div class="rowbtn"><input type="file" id="fileX" accept=".xlsx,.xls,.csv"><button class="btn light small" id="btnTpl">Örnek şablon indir</button></div>
-    <div id="prev"></div></div>
-  <div class="card"><h2>Görselden Vardiya Yükle (OCR)</h2>
-    <p class="hint">Vardiya tablosunun ekran görüntüsünü seçin. Okunan değerler aşağıda <b>düzenlenebilir tablo</b> olarak gelir; kontrol edip kaydedin. Sarı = şüpheli, kırmızı = okunamadı/hatalı. Boş veya "B" = izinli.</p>
-    <div class="rowbtn"><input type="file" id="fileImg" accept="image/*"></div>
-    <div id="ocrOut"></div></div>
   <div class="card" id="cardEdit"><h2>Vardiyayı Düzenle</h2>
-    <p class="hint">Kaydedilmiş vardiyayı hafta bazında düzeltin. Hücre: <b>08:45-16:45</b>, yalnızca giriş için <b>08:45-</b>, izin için <b>B</b> veya boş. Onaylar korunur.</p>
+    <p class="hint">Her hücrede üstte giriş, altta çıkış saati var; <b>08</b> yazınca otomatik dakikaya geçer. Boş hücre = izin (B). Üstteki hazır butonlarla tek dokunuşta doldurup sonraki güne geçebilirsiniz. Yalnızca giriş için üst satırı doldurun. Onaylar korunur.</p>
     <div class="rowbtn"><label class="datebox">Hafta başlangıcı <input type="date" id="edWeek" value="${mondayOf(selDate)}"></label>
       <button class="btn light small" id="btnEdLoad">Yükle</button>
-      <button class="btn light small" id="btnEdXlsx">Excel'e indir</button>
-      <label class="btn light small filebtn">Düzenlenmiş Excel'i yükle<input type="file" id="edXlsxIn" accept=".xlsx,.xls" hidden></label></div>
-    <p class="hint">Excel'e indirip düzenleyin, aynı dosyayı geri yükleyin: yalnızca değişen hücreler sisteme otomatik aktarılır. Sütun başlıklarındaki tarihlere dokunmayın.</p>
+      <button class="btn light small" id="btnEdXlsx">Excel'e indir</button></div>
+    <p class="hint">Yeni hafta için tarihi seçip <b>Yükle</b>'ye basın, <b>Tümünü ekle</b> ile çalışanları getirin ve saatleri yazın. Excel'e indir yalnızca yedek/rapor içindir.</p>
     <div id="edOut"></div></div>
   <div class="card"><h2>Vardiya Görselleri</h2>
-    <p class="hint">Yüklediğiniz görsel, tüm çalışanlara "Haftalık Vardiya" olarak görünür. OCR ile kaydettiğinizde görsel de otomatik yayınlanır. Aynı haftaya yeniden yüklerseniz eskisinin yerine geçer.</p>
+    <p class="hint">Yüklediğiniz görsel, tüm çalışanlara "Haftalık Vardiya" olarak görünür. Aynı haftaya yeniden yüklerseniz eskisinin yerine geçer.</p>
     <div class="form"><label>Hafta başlangıcı (Pazartesi)<input type="date" id="imgWeek" value="${mondayOf(selDate)}"></label>
       <label>Görsel<input type="file" id="imgFile" accept="image/*"></label><button class="btn" id="btnImgPub">Yayınla</button></div>
     <div id="imgList" class="imglist"></div></div>
   <div class="card"><h2>Seçili gün: ${fmtDate(selDate)}</h2>
     <div class="rowbtn"><button class="btn" id="btnExp">Excel'e aktar</button><button class="btn danger" id="btnDelDay">Bu günün vardiyasını sil</button></div></div>`;
 
-  $('#btnTpl').onclick = async () => {
-    const X = await loadXLSX(); const t = todayStr();
-    const ws = X.utils.aoa_to_sheet([['Sicil', 'Ad Soyad', 'Telefon', 'Tarih', 'Giriş', 'Çıkış'],
-      ['1001', 'Ayşe Yılmaz', '05321234567', fmtDate(t), '08:45', '17:45'],
-      ['1002', 'Mehmet Demir', '05331234567', fmtDate(t), '14:45', '23:45']]);
-    const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, 'Vardiya'); X.writeFile(wb, 'vardiya-sablon.xlsx');
-  };
-  $('#fileX').onchange = async e => {
-    const f = e.target.files[0]; if (!f) return;
-    $('#prev').innerHTML = '<p class="hint">Okunuyor…</p>';
-    try {
-      const res = await parseExcel(f); parsed = res.rows;
-      if (!parsed.length) { $('#prev').innerHTML = '<p class="err">Geçerli satır bulunamadı.</p>'; return; }
-      const ds = [...new Set(parsed.map(r => r.date))].sort(), n = new Set(parsed.map(r => r.sicil)).size;
-      $('#prev').innerHTML = `<p><b>${parsed.length}</b> vardiya satırı, <b>${n}</b> kişi, ${fmtDate(ds[0])} – ${fmtDate(ds.at(-1))}` +
-        (res.skipped ? ` <span class="tag">${res.skipped} satır atlandı</span>` : '') + `</p>
-        <div class="tw"><table><tr><th>Sicil</th><th>Ad</th><th>Tarih</th><th>Giriş</th><th>Çıkış</th></tr>${
-          parsed.slice(0, 8).map(r => `<tr><td>${esc(r.sicil)}</td><td>${esc(r.ad)}</td><td>${fmtDate(r.date)}</td><td>${r.giris}</td><td>${r.cikis || '–'}</td></tr>`).join('')}</table></div>
-        <div class="rowbtn"><button class="btn" id="btnSave">Vardiyayı kaydet</button></div>`;
-      $('#btnSave').onclick = async ev => {
-        ev.target.disabled = true; ev.target.textContent = 'Kaydediliyor…';
-        try {
-          const r = await saveShifts(parsed);
-          toast(`${r.count} kayıt işlendi` + (r.newEmp ? `, ${r.newEmp} yeni çalışan` : '') + (r.noTel ? `, ${r.noTel} kişinin telefonu eksik` : ''));
-          parsed = null; renderAdmin();
-        } catch (err) { toast('Hata: ' + err.message); ev.target.disabled = false; ev.target.textContent = 'Vardiyayı kaydet'; }
-      };
-    } catch (err) { $('#prev').innerHTML = `<p class="err">${esc(err.message)}</p>`; }
-  };
-  $('#fileImg').onchange = e => { const f = e.target.files[0]; if (f) runOcr(f); };
   $('#edWeek').onchange = loadEditor; $('#btnEdLoad').onclick = loadEditor; loadEditor();
   $('#btnEdXlsx').onclick = exportWeekXlsx;
-  $('#edXlsxIn').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) importWeekXlsx(f); };
   $('#btnImgPub').onclick = async ev => {
     const f = $('#imgFile').files[0], w = $('#imgWeek').value;
     if (!f || !w) return toast('Hafta ve görsel seçin.');
@@ -581,21 +477,77 @@ async function loadEditor() {
 }
 const cellTxt = c => !c ? 'B' : `${c.giris || ''}-${c.cikis || ''}`;
 
+/* --- Saat hücresi: üstte giriş, altta çıkış (xx.xx); 2 hane yazınca sonraki kutuya geçer; üstte hazır vardiya butonları --- */
+const QUICK = [['08.45-16.45', '08:45-16:45'], ['11.15-21.15', '11:15-21:15'], ['14.15-21.15', '14:15-21:15']];
+const tFields = v => { const m = String(v ?? '').match(/(\d{1,2})[:.](\d{2})\s*[-–—]\s*(?:(\d{1,2})[:.](\d{2}))?/);
+  return m ? [pad(m[1]), m[2], m[3] != null ? pad(m[3]) : '', m[4] || ''] : ['', '', '', '']; };
+const tJoin = f => { const l = f[0] || f[1] ? `${f[0]}:${f[1]}` : '', r = f[2] || f[3] ? `${f[2]}:${f[3]}` : ''; return l || r ? `${l}-${r}` : ''; };
+function tcell(val, cls = '', attrs = '') {
+  const f = tFields(val), tp = i => `<input class="tp" data-i="${i}" inputmode="numeric" maxlength="2" autocomplete="off" placeholder="xx" value="${f[i]}" aria-label="${i < 2 ? 'Giriş' : 'Çıkış'} ${i % 2 ? 'dakika' : 'saat'}">`;
+  return `<div class="tcw"><input type="hidden" class="cell ${cls}" value="${esc(tJoin(f))}" ${attrs}><div class="tl">${tp(0)}<i>.</i>${tp(1)}</div><div class="tl">${tp(2)}<i>.</i>${tp(3)}</div></div>`;
+}
+const qbarHTML = () => `<div class="qbar"><span class="qlbl">Bir hücreye dokunun</span><div class="qbtns">${QUICK.map(([l, v]) => `<button type="button" class="qbtn" data-q="${v}">${l}</button>`).join('')}<button type="button" class="qbtn qoff" data-q="">B · izin</button></div></div>`;
+function wireTime(box) {
+  if (box._tw) return; box._tw = true;
+  const isTp = el => el?.classList?.contains('tp');
+  const tps = () => [...box.querySelectorAll('.tp')];
+  const focusAt = el => { if (el) { el.focus(); try { el.select(); } catch { } } };
+  const next = el => { const a = tps(); focusAt(a[a.indexOf(el) + 1]); };
+  const prev = el => { const a = tps(); focusAt(a[a.indexOf(el) - 1]); };
+  const sync = w => { const h = w.querySelector('.cell'); h.value = tJoin([...w.querySelectorAll('.tp')].map(x => x.value)); h.dispatchEvent(new Event('input')); };
+  const setLabel = t => {
+    const td = t.closest('td'), tr = td.parentElement, idx = [...tr.children].indexOf(td), th = box.querySelectorAll('thead th')[idx];
+    const name = tr.querySelector('b')?.textContent || tr.querySelector('.nm-in')?.value || '';
+    box.querySelector('.qlbl').textContent = `${name} · ${(th?.innerText || '').replace(/\s+/g, ' ')}`;
+  };
+  box.addEventListener('focusin', e => { if (!isTp(e.target)) return; box._active = e.target.closest('.tcw'); try { e.target.select(); } catch { } setLabel(e.target); });
+  box.addEventListener('focusout', e => { const t = e.target; if (isTp(t) && t.value.length === 1) { t.value = '0' + t.value; sync(t.closest('.tcw')); } });
+  box.addEventListener('input', e => {
+    const t = e.target; if (!isTp(t)) return;
+    let v = t.value.replace(/\D/g, '').slice(0, 2); const isH = +t.dataset.i % 2 === 0;
+    if (v.length === 1) { if (+v > (isH ? 2 : 5)) v = '0' + v; }                                 // 8 → 08, 7 → 07
+    else if (v.length === 2) v = String(Math.min(+v, isH ? 23 : 59)).padStart(2, '0');
+    t.value = v; sync(t.closest('.tcw'));
+    if (v.length === 2) next(t);
+  });
+  box.addEventListener('keydown', e => {
+    const t = e.target; if (!isTp(t)) return;
+    if (e.key === 'Backspace' && t.value === '') { e.preventDefault(); prev(t); return; }
+    if (['.', ':', ',', ' ', '-', 'Enter'].includes(e.key)) { e.preventDefault(); if (t.value === '' && e.key !== 'Enter') return; if (t.value.length === 1) { t.value = '0' + t.value; sync(t.closest('.tcw')); } next(t); }
+  });
+  box.addEventListener('mousedown', e => { if (e.target.closest('.qbtn')) e.preventDefault(); });   // klavye kapanmasın
+  box.addEventListener('click', e => {
+    const b = e.target.closest('.qbtn'); if (!b) return;
+    const w = box._active; if (!w || !w.isConnected) return toast('Önce bir saat hücresine dokunun.');
+    const f = tFields(b.dataset.q);
+    w.querySelectorAll('.tp').forEach((x, i) => { x.value = f[i]; }); sync(w);
+    const a = [...box.querySelectorAll('.tcw')]; focusAt(a[a.indexOf(w) + 1]?.querySelector('.tp'));   // sonraki güne geç
+  });
+}
+
+
 function renderEditor(ws, dates, list) {
   const out = $('#edOut'), DN = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+  list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });          // ilk yüklenen değerler sabit kalsın (değişiklik tespiti için)
   const addable = () => employees.filter(e => !list.some(p => p.sicil === e.sicil) && e.aktif !== false);
   const draw = () => {
-    out.innerHTML = `<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
-      list.map((p, ri) => `<tr data-r="${ri}"><td><b>${roleTag(p.sicil)}${esc(p.ad)}</b><br><small class="hint">${esc(p.sicil)}</small></td>${
-        p.cells.map(c => { const t = cellTxt(c); return `<td><input class="cell ${t === 'B' ? 'off' : ''}" value="${t === 'B' ? '' : esc(t)}" data-orig="${t === 'B' ? '' : esc(t)}" placeholder="B"></td>`; }).join('')}</tr>`).join('') ||
+    list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });
+    out.innerHTML = `${qbarHTML()}<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
+      list.map((p, ri) => `<tr data-r="${ri}"><td><b>${esc(p.ad)}</b><br><small class="hint">${esc(p.sicil)}</small></td>${
+        p.cells.map((c, ci) => { const t = cellTxt(c), v = t === 'B' ? '' : t, ov = p.orig[ci] === 'B' ? '' : p.orig[ci];
+          return `<td>${tcell(v, v === '' ? 'off' : v !== ov ? 'chg' : '', `data-orig="${esc(ov)}"`)}</td>`; }).join('')}</tr>`).join('') ||
       `<tr><td colspan="8" class="empty">Bu hafta için kayıt yok. Aşağıdan kişi ekleyip saat girebilirsiniz.</td></tr>`}</tbody></table></div>
       <div class="rowbtn"><select id="edAdd" style="max-width:260px"><option value="">+ Kişi ekle…</option>${addable().map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('')}</select>
+      <button class="btn light" id="edAddAll">Tümünü ekle</button>
       <button class="btn" id="btnEdSave">Değişiklikleri kaydet</button></div>`;
     $('#edAdd').onchange = ev => { const e = employees.find(x => x.sicil === ev.target.value); if (!e) return;
-      keep(); list.push({ sicil: e.sicil, ad: e.ad, cells: Array(7).fill(null) }); draw(); };
+      keep(); list.push({ sicil: e.sicil, ad: e.ad, cells: Array(7).fill(null) }); list.sort(cmpPeople); draw(); };
+    $('#edAddAll').onclick = () => { const a = addable(); if (!a.length) return toast('Eklenecek çalışan kalmadı.');
+      keep(); a.forEach(e => list.push({ sicil: e.sicil, ad: e.ad, cells: Array(7).fill(null) })); list.sort(cmpPeople); draw(); };
     out.querySelectorAll('.cell').forEach(inp => inp.oninput = () => {
       inp.className = 'cell' + (parseCell(inp.value, true) === null ? ' err' : inp.value.trim() !== inp.dataset.orig ? ' chg' : /^b?$/i.test(inp.value.trim()) ? ' off' : ''); });
     $('#btnEdSave').onclick = save;
+    out._active = null; wireTime(out);
   };
   const keep = () => out.querySelectorAll('tbody tr[data-r]').forEach(tr => { const p = list[+tr.dataset.r];
     [...tr.querySelectorAll('.cell')].forEach((c, i) => { const v = parseCell(c.value, true); if (v && v !== 'off') p.cells[i] = { giris: v.giris, cikis: v.cikis }; else if (v === 'off') p.cells[i] = null; }); });
@@ -618,7 +570,7 @@ function renderEditor(ws, dates, list) {
   draw();
 }
 
-/* --- Excel ile düzenle: indir → düzenle → geri yükle (yalnızca farklar uygulanır) --- */
+/* --- Haftalık vardiyayı Excel'e indir (yalnızca indirme; yükleme yok) --- */
 const DN3 = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 async function fetchWeekMap(dates) {
   const cur = new Map();                       // "tarih|sicil" -> {giris, cikis, ad}
@@ -646,47 +598,6 @@ async function exportWeekXlsx() {
     X.writeFile(wb, `vardiya-${ws}.xlsx`);
   } catch (e) { toast('İndirilemedi: ' + e.message); }
 }
-const headerDate = c => {
-  if (typeof c === 'number') return c > 30000 ? pDate(c) : null;
-  const m = String(c ?? '').match(/(\d{1,2})[./-](\d{1,2})[./-](\d{4})/); return m ? pDate(m[0]) : null;
-};
-async function importWeekXlsx(file) {
-  try {
-    const X = await loadXLSX(), wb = X.read(await file.arrayBuffer(), { type: 'array' });
-    const data = X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
-    const hi = data.findIndex(r => r.some(c => norm(c).includes('sicil')));
-    if (hi < 0) return toast('"Sicil" başlığı bulunamadı. Panelden indirdiğiniz dosyayı kullanın.');
-    const H = data[hi], iS = H.findIndex(c => norm(c).includes('sicil')), iA = H.findIndex(c => norm(c).includes('ad')), iT = H.findIndex(c => norm(c).includes('tel'));
-    const dc = []; H.forEach((c, i) => { const d = headerDate(c); if (d) dc.push({ i, date: d }); });
-    if (!dc.length) return toast('Tarih başlıkları okunamadı (örn. "Pzt 19.10.2026"). Başlıkları değiştirmeyin.');
-    const cur = await fetchWeekMap(dc.map(x => x.date)), upd = [], offs = [], bad = [], skippedPeople = [];
-    for (const r of data.slice(hi + 1)) {
-      const sicil = cleanSicil(r[iS]); if (!sicil) continue;
-      const known = employees.find(e => e.sicil === sicil), ad = String(iA >= 0 ? r[iA] : '').trim() || known?.ad || '', tel = String(iT >= 0 ? r[iT] : '').trim() || known?.telefon || '';
-      if (!known && !ad) { skippedPeople.push(sicil); continue; }
-      for (const { i, date } of dc) {
-        let raw = r[i], t = typeof raw === 'number' ? (raw < 1 ? (pTime(raw) || '') + '-' : String(raw)) : String(raw ?? '').trim().replace(/[–—]/g, '-');
-        if (/^\d{1,2}[:.]\d{2}$/.test(t)) t += '-';
-        const v = parseCell(t, true), c = cur.get(date + '|' + sicil);
-        if (v === null) { bad.push(`${ad || sicil} ${fmtDate(date).slice(0, 5)}: "${t}"`); continue; }
-        if (v === 'off') { if (c?.giris || c?.cikis) offs.push({ date, sicil, ad, had: true }); else if (!c?.off) offs.push({ date, sicil, ad, mark: true }); continue; }
-        if (c && c.giris === v.giris && (c.cikis || null) === (v.cikis || null)) continue;
-        upd.push({ sicil, ad, tel, date, giris: v.giris, cikis: v.cikis });
-        if (!v.cikis && c?.cikis) offs.push({ date, sicil, types: ['cikis'] });
-      }
-    }
-    if (bad.length) return toast(`Geçersiz hücre: ${bad.slice(0, 3).join('; ')}${bad.length > 3 ? ` … (+${bad.length - 3})` : ''}. Düzeltip tekrar yükleyin.`);
-    if (!upd.length && !offs.length) return toast('Değişiklik yok.' + (skippedPeople.length ? ` (${skippedPeople.length} yeni kişinin adı eksik, atlandı)` : ''));
-    const del = offs.filter(o => o.had).length, mark = offs.filter(o => o.mark).length;
-    if (!confirm(`${upd.length} hücre eklenecek/güncellenecek, ${del} gün izin yapılacak (vardiya silinecek)${mark ? `, ${mark} izin günü işaretlenecek` : ''}${skippedPeople.length ? `, ${skippedPeople.length} kişi atlanacak (adı eksik)` : ''}. Sisteme aktarılsın mı?`)) return;
-    await saveShifts(upd, offs);
-    toast(`Excel aktarıldı: ${upd.length} güncelleme, ${del + mark} izin günü.`);
-    const first = dc.map(x => x.date).sort()[0];
-    if (!dc.some(x => x.date === selDate)) { selDate = first; $('#selDate').value = selDate; watchRows(); }
-    loadEditor();
-  } catch (e) { toast('Excel okunamadı: ' + e.message); }
-}
-
 /* --- Vardiya görselleri (Firestore'da küçültülmüş JPEG olarak; Storage ücretli olduğu için) --- */
 async function compressImage(file) {
   const img = await imgFromFile(file); let maxW = 1800;
@@ -720,103 +631,7 @@ async function loadImgList() {
   } catch (e) { el.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 
-/* --- Görselden vardiya (OCR) --- */
-let tessP = null;
-const loadTess = () => tessP ||= new Promise((res, rej) => {
-  if (window.Tesseract) return res(window.Tesseract);
-  const sc = document.createElement('script');
-  sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
-  sc.onload = () => res(window.Tesseract); sc.onerror = () => rej(new Error('OCR kütüphanesi yüklenemedi (internet bağlantısını kontrol edin)'));
-  document.head.appendChild(sc);
-});
 const imgFromFile = f => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Görsel açılamadı')); i.src = URL.createObjectURL(f); });
-
-async function runOcr(file) {
-  ocrFile = file;
-  const out = $('#ocrOut'); out.innerHTML = '<p class="hint" id="ocrMsg">Görsel hazırlanıyor…</p>';
-  const msg = t => { const m = $('#ocrMsg'); if (m) m.textContent = t; };
-  try {
-    const img = await imgFromFile(file), k = Math.min(3, Math.max(1.5, 2400 / Math.max(img.width, img.height)));
-    const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
-    const cx = cv.getContext('2d', { willReadFrequently: true }); cx.imageSmoothingQuality = 'high'; cx.drawImage(img, 0, 0, cv.width, cv.height);
-    const probe = (x, y) => {
-      try { const d = cx.getImageData(Math.round(x) - 3, Math.round(y) - 3, 7, 7).data; let r = 0, b = 0, n = d.length / 4;
-        for (let i = 0; i < d.length; i += 4) { r += d[i]; b += d[i + 2]; } r /= n; b /= n; return (b - r >= 6 && b > 200) ? 'blue' : 'white'; } catch { return null; }
-    };
-    msg('OCR motoru yükleniyor (ilk seferde biraz sürer)…');
-    const T = await loadTess();
-    const worker = await T.createWorker('eng', 1, { logger: m => { if (m.status === 'recognizing text') msg(`Okunuyor… %${Math.round(m.progress * 100)}`); } });
-    await worker.setParameters({ tessedit_pageseg_mode: '11', user_defined_dpi: '150' });
-    const { data } = await worker.recognize(cv);
-    await worker.terminate();
-    const words = (data.words || []).map(w => ({ text: w.text, conf: w.confidence, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 }));
-    const res = parseGrid(words, { probe, year: +todayStr().slice(0, 4) });
-    if (!res.rows.length) { out.innerHTML = `<p class="err">${esc(res.warnings.join(' ') || 'Tablo okunamadı.')}</p>`; return; }
-    renderOcrPreview(res);
-  } catch (err) { out.innerHTML = `<p class="err">${esc(err.message)}</p>`; }
-}
-
-function renderOcrPreview(res) {
-  const out = $('#ocrOut'), dl = [...Array(7)].map(() => '');
-  const empOpts = '<option value="">— seç / yeni —</option>' + employees.map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('');
-  out.innerHTML = `
-    ${res.warnings.map(w => `<p class="err">${esc(w)}</p>`).join('')}
-    <div class="rowbtn"><label class="datebox">Hafta başlangıcı (Pazartesi) <input type="date" id="wkStart" value="${res.weekStart || ''}"></label></div>
-    <div class="tw ocr"><table><thead><tr><th>Ad (OCR)</th><th>Çalışan / Sicil</th><th>Telefon</th>${res.days.map((d, i) => `<th data-d="${i}">${d}<br><small id="dl${i}"></small></th>`).join('')}</tr></thead><tbody>${
-      res.rows.map((r, ri) => `<tr data-r="${ri}">
-        <td><input class="nm-in" value="${esc(r.nameRaw)}"><small class="hint">${esc(r.tag)}</small></td>
-        <td><select class="emp-sel">${empOpts}</select><input class="sic-in" placeholder="Sicil no" inputmode="numeric"></td>
-        <td><input class="tel-in" placeholder="05xx…" inputmode="tel"></td>
-        ${r.cells.map(c => `<td><input class="cell ${c.flag || (c.text === 'B' ? 'off' : '')}" value="${esc(c.text)}" title="${esc(c.note || '')}" placeholder="B"></td>`).join('')}
-      </tr>`).join('')}</tbody></table></div>
-    <p class="hint">Sicil/telefon boş bırakılırsa kişi kaydedilmez. Yeni kişiler Çalışanlar listesine otomatik eklenir. Hücre biçimi: <b>08:45-16:45</b>, izin için <b>B</b> veya boş.</p>
-    <div class="rowbtn"><button class="btn" id="btnOcrSave">Vardiyayı kaydet</button><button class="btn light" id="btnOcrImg">Sadece görseli yayınla</button></div>`;
-
-  const trs = [...out.querySelectorAll('tbody tr')];
-  const fillRow = (tr, e) => { tr.querySelector('.sic-in').value = e?.sicil || ''; tr.querySelector('.tel-in').value = e?.telefon || ''; if (e) tr.querySelector('.nm-in').value = e.ad; };
-  trs.forEach((tr, i) => {
-    const e = matchEmployee(res.rows[i].nameRaw, employees);
-    if (e) { tr.querySelector('.emp-sel').value = e.sicil; fillRow(tr, e); }
-    tr.querySelector('.emp-sel').onchange = ev => fillRow(tr, employees.find(x => x.sicil === ev.target.value));
-    tr.querySelectorAll('.cell').forEach(inp => inp.oninput = () => { inp.className = 'cell' + (parseCell(inp.value) === null ? ' err' : /^b?$/i.test(inp.value.trim()) ? ' off' : ''); });
-  });
-  const wk = $('#wkStart'), dayDate = i => { if (!wk.value) return null; const d = new Date(wk.value + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + i); return d.toISOString().slice(0, 10); };
-  const upd = () => dl.forEach((_, i) => { const d = dayDate(i); $('#dl' + i).textContent = d ? fmtDate(d).slice(0, 5) : ''; });
-  wk.onchange = upd; upd();
-
-  $('#btnOcrImg').onclick = async ev => {
-    if (!wk.value) return toast('Hafta başlangıç tarihini seçin.');
-    ev.target.disabled = true;
-    try { await publishImage(ocrFile, wk.value); toast('Görsel yayınlandı.'); if (mondayOf(wk.value) === mondayOf(selDate)) watchWeek(); loadImgList(); }
-    catch (err) { toast('Yüklenemedi: ' + err.message); } finally { ev.target.disabled = false; }
-  };
-  $('#btnOcrSave').onclick = async ev => {
-    if (!wk.value) return toast('Hafta başlangıç tarihini seçin.');
-    const list = [], offs = []; let bad = 0, skipped = 0;
-    for (const tr of trs) {
-      const sicil = cleanSicil(tr.querySelector('.sic-in').value), ad = tr.querySelector('.nm-in').value.trim(), tel = tr.querySelector('.tel-in').value.trim();
-      const cells = [...tr.querySelectorAll('.cell')];
-      if (!sicil) { if (cells.some(c => parseCell(c.value) && parseCell(c.value) !== 'off')) skipped++; continue; }
-      const known = employees.find(x => x.sicil === sicil);
-      if (!known && (!ad || !tel)) { tr.querySelector('.tel-in').classList.add('err'); bad++; continue; }
-      cells.forEach((c, i) => {
-        const p = parseCell(c.value), date = dayDate(i);
-        if (p === null) { c.classList.add('err'); bad++; }
-        else if (p === 'off') offs.push({ date, sicil, ad });
-        else list.push({ sicil, ad, tel, date, ...p });
-      });
-    }
-    if (bad) return toast(`${bad} hücre/alan hatalı (kırmızı). Düzeltin.`);
-    if (!list.length && !offs.length) return toast('Kaydedilecek satır yok.');
-    if (skipped && !confirm(`${skipped} kişinin sicil numarası boş; bunlar kaydedilmeyecek. Devam edilsin mi?`)) return;
-    ev.target.disabled = true; ev.target.textContent = 'Kaydediliyor…';
-    try {
-      const r = await saveShifts(list, offs);
-      let imgOk = true; try { await publishImage(ocrFile, wk.value); } catch (err) { imgOk = false; }
-      toast(`${r.count} kayıt işlendi` + (r.newEmp ? `, ${r.newEmp} yeni çalışan` : '') + (imgOk ? ', görsel yayınlandı' : ', görsel yayınlanamadı')); out.innerHTML = ''; watchWeek();
-    } catch (err) { toast('Hata: ' + err.message); ev.target.disabled = false; ev.target.textContent = 'Vardiyayı kaydet'; }
-  };
-}
 
 /* --- Çalışanlar --- */
 function tabCalisan(b) {
