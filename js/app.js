@@ -482,9 +482,9 @@ const QUICK = [['08.45-16.45', '08:45-16:45'], ['11.15-21.15', '11:15-21:15'], [
 const tFields = v => { const m = String(v ?? '').match(/(\d{1,2})[:.](\d{2})\s*[-–—]\s*(?:(\d{1,2})[:.](\d{2}))?/);
   return m ? [pad(m[1]), m[2], m[3] != null ? pad(m[3]) : '', m[4] || ''] : ['', '', '', '']; };
 const tJoin = f => { const l = f[0] || f[1] ? `${f[0]}:${f[1]}` : '', r = f[2] || f[3] ? `${f[2]}:${f[3]}` : ''; return l || r ? `${l}-${r}` : ''; };
-function tcell(val, cls = '', attrs = '') {
+function tcell(val, cls = '', attrs = '', isb = false) {
   const f = tFields(val), tp = i => `<input class="tp" data-i="${i}" inputmode="numeric" maxlength="2" autocomplete="off" placeholder="xx" value="${f[i]}" aria-label="${i < 2 ? 'Giriş' : 'Çıkış'} ${i % 2 ? 'dakika' : 'saat'}">`;
-  return `<div class="tcw"><input type="hidden" class="cell ${cls}" value="${esc(tJoin(f))}" ${attrs}><div class="tl">${tp(0)}<i>.</i>${tp(1)}</div><div class="tl">${tp(2)}<i>.</i>${tp(3)}</div></div>`;
+  return `<div class="tcw${isb ? ' isb' : ''}${tJoin(f) === '08:45-21:15' ? ' full' : ''}"><span class="bmark" title="Düzenlemek için dokunun">B</span><input type="hidden" class="cell ${cls}" value="${esc(tJoin(f))}" ${attrs}><div class="tl">${tp(0)}<i>.</i>${tp(1)}</div><div class="tl">${tp(2)}<i>.</i>${tp(3)}</div></div>`;
 }
 const qbarHTML = () => `<div class="qbar"><span class="qlbl">Bir hücreye dokunun</span><div class="qbtns">${QUICK.map(([l, v]) => `<button type="button" class="qbtn" data-q="${v}">${l}</button>`).join('')}<button type="button" class="qbtn qoff" data-q="">B · izin</button></div></div>`;
 function wireTime(box) {
@@ -494,7 +494,7 @@ function wireTime(box) {
   const focusAt = el => { if (el) { el.focus(); try { el.select(); } catch { } } };
   const next = el => { const a = tps(); focusAt(a[a.indexOf(el) + 1]); };
   const prev = el => { const a = tps(); focusAt(a[a.indexOf(el) - 1]); };
-  const sync = w => { const h = w.querySelector('.cell'); h.value = tJoin([...w.querySelectorAll('.tp')].map(x => x.value)); h.dispatchEvent(new Event('input')); };
+  const sync = w => { const h = w.querySelector('.cell'); h.value = tJoin([...w.querySelectorAll('.tp')].map(x => x.value)); if (h.value) w.classList.remove('isb'); w.classList.toggle('full', h.value === '08:45-21:15'); h.dispatchEvent(new Event('input')); };
   const setLabel = t => {
     const td = t.closest('td'), tr = td.parentElement, idx = [...tr.children].indexOf(td), th = box.querySelectorAll('thead th')[idx];
     const name = tr.querySelector('b')?.textContent || tr.querySelector('.nm-in')?.value || '';
@@ -517,10 +517,12 @@ function wireTime(box) {
   });
   box.addEventListener('mousedown', e => { if (e.target.closest('.qbtn')) e.preventDefault(); });   // klavye kapanmasın
   box.addEventListener('click', e => {
+    const bm = e.target.closest('.bmark'); if (bm) { const w = bm.closest('.tcw'); w.classList.remove('isb'); focusAt(w.querySelector('.tp')); return; }
     const b = e.target.closest('.qbtn'); if (!b) return;
     const w = box._active; if (!w || !w.isConnected) return toast('Önce bir saat hücresine dokunun.');
     const f = tFields(b.dataset.q);
     w.querySelectorAll('.tp').forEach((x, i) => { x.value = f[i]; }); sync(w);
+    if (!b.dataset.q) w.classList.add('isb');                                                    // izin: hücrede yalnızca B görünür
     const a = [...box.querySelectorAll('.tcw')]; focusAt(a[a.indexOf(w) + 1]?.querySelector('.tp'));   // sonraki güne geç
   });
 }
@@ -535,21 +537,21 @@ function renderEditor(ws, dates, list) {
     out.innerHTML = `${qbarHTML()}<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
       list.map((p, ri) => `<tr data-r="${ri}"><td><b>${esc(p.ad)}</b><br><small class="hint">${esc(p.sicil)}</small></td>${
         p.cells.map((c, ci) => { const t = cellTxt(c), v = t === 'B' ? '' : t, ov = p.orig[ci] === 'B' ? '' : p.orig[ci];
-          return `<td>${tcell(v, v === '' ? 'off' : v !== ov ? 'chg' : '', `data-orig="${esc(ov)}"`)}</td>`; }).join('')}</tr>`).join('') ||
+          return `<td>${tcell(v, v === '' ? 'off' : v !== ov ? 'chg' : '', `data-orig="${esc(ov)}"`, v === '' && (!p.fresh || p.bm?.[ci]))}</td>`; }).join('')}</tr>`).join('') ||
       `<tr><td colspan="8" class="empty">Bu hafta için kayıt yok. Aşağıdan kişi ekleyip saat girebilirsiniz.</td></tr>`}</tbody></table></div>
       <div class="rowbtn"><select id="edAdd" style="max-width:260px"><option value="">+ Kişi ekle…</option>${addable().map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('')}</select>
       <button class="btn light" id="edAddAll">Tümünü ekle</button>
       <button class="btn" id="btnEdSave">Değişiklikleri kaydet</button></div>`;
     $('#edAdd').onchange = ev => { const e = employees.find(x => x.sicil === ev.target.value); if (!e) return;
-      keep(); list.push({ sicil: e.sicil, ad: e.ad, cells: Array(7).fill(null) }); list.sort(cmpPeople); draw(); };
+      keep(); list.push({ sicil: e.sicil, ad: e.ad, fresh: true, cells: Array(7).fill(null) }); list.sort(cmpPeople); draw(); };
     $('#edAddAll').onclick = () => { const a = addable(); if (!a.length) return toast('Eklenecek çalışan kalmadı.');
-      keep(); a.forEach(e => list.push({ sicil: e.sicil, ad: e.ad, cells: Array(7).fill(null) })); list.sort(cmpPeople); draw(); };
+      keep(); a.forEach(e => list.push({ sicil: e.sicil, ad: e.ad, fresh: true, cells: Array(7).fill(null) })); list.sort(cmpPeople); draw(); };
     out.querySelectorAll('.cell').forEach(inp => inp.oninput = () => {
       inp.className = 'cell' + (parseCell(inp.value, true) === null ? ' err' : inp.value.trim() !== inp.dataset.orig ? ' chg' : /^b?$/i.test(inp.value.trim()) ? ' off' : ''); });
     $('#btnEdSave').onclick = save;
     out._active = null; wireTime(out);
   };
-  const keep = () => out.querySelectorAll('tbody tr[data-r]').forEach(tr => { const p = list[+tr.dataset.r];
+  const keep = () => out.querySelectorAll('tbody tr[data-r]').forEach(tr => { const p = list[+tr.dataset.r]; p.bm = [...tr.querySelectorAll('.tcw')].map(w => w.classList.contains('isb'));
     [...tr.querySelectorAll('.cell')].forEach((c, i) => { const v = parseCell(c.value, true); if (v && v !== 'off') p.cells[i] = { giris: v.giris, cikis: v.cikis }; else if (v === 'off') p.cells[i] = null; }); });
   const save = async ev => {
     const upd = [], offs = []; let bad = 0;
