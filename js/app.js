@@ -54,6 +54,21 @@ let unsubMine = null, weekSeq = 0, unsubOff = null, offRows = [], mineOff = fals
 const ready = { staff: false, auth: false };
 const authorized = () => !!(me || staff);
 const mySicil = () => me?.sicil || staff?.sicil || null;
+/* ---- Mağazalar: magaza alanı boş = Atatürk Cd. (mevcut ekip). Çalışan/yönetici yalnızca kendi mağazasının panosunu görür. ---- */
+let STORES = {}, viewStore = '', unsubStores = null;                                  // STORES: {slug: görünen ad}
+const slug = s => fold(s).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const storeName = id => id ? (STORES[id] || id) : 'Atatürk Cd.';
+const scope = () => me ? (me.magaza || viewStore) : staff ? (staff.m || '') : '';
+const inScope = r => (r.magaza || '') === scope();
+const imgId = ws => scope() ? `${scope()}_${ws}` : ws;
+const pwOf = sc => sc.length < 6 ? sc.padEnd(6, '0') : sc;                             // Firebase en az 6 karakter ister: 82740 → 827400
+function renderStoreSel() {
+  const ids = Object.keys(STORES), show = !!me && !me.magaza && ids.length > 0;
+  $$('.storesel').forEach(el => { el.hidden = !show; if (show) { el.innerHTML = '<option value="">Atatürk Cd. (mevcut ekip)</option>' + ids.map(i => `<option value="${esc(i)}">${esc(STORES[i])}</option>`).join(''); el.value = viewStore; } });
+  const em = $('#eMag'); if (em) { const v = em.value; em.innerHTML = '<option value="">Atatürk Cd. (mevcut ekip)</option>' + ids.map(i => `<option value="${esc(i)}">${esc(STORES[i])}</option>`).join(''); em.value = v; }
+}
+function setViewStore(v) { viewStore = v; watchRows(); renderStoreSel(); renderDash(); if (me && adminOpen) renderAdmin(); }
+document.addEventListener('change', e => { if (e.target.classList?.contains('storesel')) setViewStore(e.target.value); });
 const mondayOf = s => { const d = new Date(s + 'T00:00:00Z'), w = (d.getUTCDay() + 6) % 7; d.setUTCDate(d.getUTCDate() - w); return d.toISOString().slice(0, 10); };
 const addDays = (s, n) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
@@ -75,18 +90,19 @@ setInterval(() => {
 /* ---------- Pano ---------- */
 function watchRows() {
   unsubRows?.();
-  unsubRows = onSnapshot(query(collection(db, 'attendance'), where('date', '==', selDate)),
-    snap => { rows = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderDash(); },
+  const sc = scope(), qw = [where('date', '==', selDate), ...(sc ? [where('magaza', '==', sc)] : [])];
+  unsubRows = onSnapshot(query(collection(db, 'attendance'), ...qw),
+    snap => { rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(inScope); renderDash(); },
     err => toast('Veri okunamadı: ' + err.message));
   watchMine();                                   // üstteki kişisel vardiya kartı da seçili güne geçer
   unsubOff?.(); offRows = [];
-  unsubOff = onSnapshot(query(collection(db, 'offdays'), where('date', '==', selDate)),
-    snap => { offRows = snap.docs.map(d => d.data()); renderDash(); }, () => { });
+  unsubOff = onSnapshot(query(collection(db, 'offdays'), ...qw),
+    snap => { offRows = snap.docs.map(d => d.data()).filter(inScope); renderDash(); }, () => { });
   watchWeek();
 }
 async function watchWeek() {
   const seq = ++weekSeq; weekDoc = null; renderWeek();
-  try { const d = await getDoc(doc(db, 'shiftImages', mondayOf(selDate))); if (seq === weekSeq) { weekDoc = d.exists() ? d.data() : null; renderWeek(); } }
+  try { const d = await getDoc(doc(db, 'shiftImages', imgId(mondayOf(selDate)))); if (seq === weekSeq) { weekDoc = d.exists() ? d.data() : null; renderWeek(); } }
   catch { if (seq === weekSeq) renderWeek(); }
 }
 function watchMine() {
@@ -97,12 +113,13 @@ function watchMine() {
     snap => { mine = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderHello(); }, () => renderHello());
 }
 function startData() {
-  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubOff?.(); unsubMeta?.(); unsubRows = unsubMine = unsubOff = unsubMeta = null; rows = []; mine = []; offRows = []; weekDoc = null; return; }
+  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubOff?.(); unsubMeta?.(); unsubStores?.(); unsubRows = unsubMine = unsubOff = unsubMeta = unsubStores = null; rows = []; mine = []; offRows = []; weekDoc = null; return; }
   watchRows(); watchMeta();
 }
 function watchMeta() {
   unsubMeta?.(); unsubMeta = null;
   if (!authorized()) return;
+  unsubStores?.(); unsubStores = onSnapshot(doc(db, 'meta', 'stores'), d => { STORES = d.exists() ? (d.data().s || {}) : {}; renderStoreSel(); renderDash(); renderHello(); }, () => { });
   unsubMeta = onSnapshot(doc(db, 'meta', 'people'), d => { if (me) return; setMeta(d.exists() ? d.data().p : {}); renderDash(); renderHello(); }, () => { });
 }
 
@@ -116,7 +133,7 @@ function renderHello() {
   const canSelf = !me && [g, c].some(r => r && canTap(r));
   const isTd = selDate === todayStr(), dayLbl = isTd ? 'Bugünkü' : fmtDate(selDate);
   el.hidden = false;
-  el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz</small><h2>${esc(ad)} ${roleTag(sc)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'full' ? 'Tam gün' : grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : mineOff ? '<span class="izin-pill">İzinli</span>' : ''}</div>` +
+  el.innerHTML = `<div class="hello-top"><div><small>Hoş geldiniz${scope() ? ' · ' + esc(storeName(scope())) : ''}</small><h2>${esc(ad)} ${roleTag(sc)}</h2></div>${any ? `<span class="badge ${grp}">${grp === 'full' ? 'Tam gün' : grp === 'aksam' ? 'Akşamcı' : 'Sabahçı'}</span>` : mineOff ? '<span class="izin-pill">İzinli</span>' : ''}</div>` +
     (any ? `<p class="hello-line">${dayLbl} vardiyanız: <b>${g?.planned || '–'} – ${c?.planned || '–'}</b></p><div class="chips">${ch(g, 'Giriş')}${ch(c, 'Çıkış')}</div>${canSelf ? '<p class="hint">Kalbim\'den işleminizi yaptıysanız saate dokunarak onaylayabilirsiniz.</p>' : ''}`
          : mineOff ? `<p class="hello-line">${isTd ? 'Bugün' : dayLbl} izinlisiniz.</p>` : `<p class="hello-line muted">${isTd ? 'Bugün' : dayLbl} için vardiya kaydınız yok (izinli olabilirsiniz).</p>`);
 }
@@ -164,7 +181,7 @@ function rowClass(p) {
 }
 function renderDash() {
   const isToday = selDate === todayStr();
-  $('#ttlWork').textContent = isToday ? 'Bugün Çalışanlar' : `Çalışanlar – ${fmtDate(selDate)}`;
+  $('#ttlWork').textContent = (isToday ? 'Bugün Çalışanlar' : `Çalışanlar – ${fmtDate(selDate)}`) + (scope() ? ' · ' + storeName(scope()) : '');
   const ps = people();
   const sabah = ps.filter(p => p.group !== 'aksam'), aksam = ps.filter(p => p.group === 'aksam' || isFull(p));   // 08:45-21:15 olanlar iki listede
   const izin = offRows.filter(o => !ps.some(p => p.sicil === o.sicil)).sort(cmpPeople);
@@ -228,7 +245,7 @@ function applyView() {
   $('#viewLogin').hidden = !r || ok;
   $('#viewDash').hidden = !r || !ok || (!!me && adminOpen);
   $('#viewAdmin').hidden = !r || !(me && adminOpen);
-  renderHeader(); renderDash(); renderHello(); renderWeek();
+  renderStoreSel(); renderHeader(); renderDash(); renderHello(); renderWeek();
   if (r && me && adminOpen) renderAdmin();
 }
 function renderHeader() {
@@ -257,7 +274,7 @@ $('#frmStaff').addEventListener('submit', async e => {
   try {
     const r = await getDoc(doc(db, 'roster', sc));
     if (!r.exists()) { $('#inStaff').value = ''; err.textContent = 'Sicil bulunamadı.'; return; }
-    staff = { sicil: sc, ad: r.data().ad || sc, token: r.data().token || '' };
+    staff = { sicil: sc, ad: r.data().ad || sc, token: r.data().token || '', m: r.data().m || '' };
     try { localStorage.setItem('takip_staff', JSON.stringify(staff)); } catch { }
     $('#inStaff').value = ''; startData(); applyView();
   } catch { err.textContent = 'Bağlantı hatası, tekrar deneyin.'; }
@@ -268,7 +285,7 @@ async function restoreStaff() {
   if (c?.sicil) {
     try {
       const r = await getDoc(doc(db, 'roster', c.sicil));
-      if (r.exists()) staff = { sicil: c.sicil, ad: r.data().ad || c.ad, token: r.data().token || '' };
+      if (r.exists()) staff = { sicil: c.sicil, ad: r.data().ad || c.ad, token: r.data().token || '', m: r.data().m || '' };
       else try { localStorage.removeItem('takip_staff'); } catch { }
     } catch { staff = c; }      // çevrimdışı: kayıtlı oturumla devam
   }
@@ -281,7 +298,7 @@ $('#frmLogin').addEventListener('submit', async e => {
   const sicil = cleanSicil($('#inSicil').value), pw = $('#inPass').value;
   $('#btnLoginGo').disabled = true; $('#loginErr').textContent = '';
   try {
-    await signInWithEmailAndPassword(auth, emailOf(sicil), pw);
+    await signInWithEmailAndPassword(auth, emailOf(sicil), pwOf(pw));
     $('#dlgLogin').close(); $('#inPass').value = '';
   } catch (err) {
     $('#loginErr').textContent = 'Sicil no veya şifre hatalı.';
@@ -296,7 +313,7 @@ onAuthStateChanged(auth, async u => {
       const sn = await getDoc(doc(db, 'employees', sicil));
       if (sn.exists() && sn.data().isAdmin) {
         me = { sicil, ...sn.data() };
-        await loadSettings(); await loadRoster(); watchEmployees(); adminOpen = false;   // önce pano açılır, yönetim 'Yönetim' butonuyla
+        viewStore = ''; await loadSettings(); if (!me.magaza) await loadRoster(); watchEmployees(); adminOpen = false;   // önce pano açılır, yönetim 'Yönetim' butonuyla
       } else { await signOut(auth); toast('Bu hesap yönetici değil.'); return; }
     } catch (e) { await signOut(auth); toast('Yetki kontrolü başarısız.'); return; }
   } else adminOpen = false;
@@ -306,11 +323,11 @@ onAuthStateChanged(auth, async u => {
 /* roster: giriş ekranının okuyabildiği herkese açık, yalnızca {ad} içeren liste (telefon/token YOK) */
 async function loadRoster() {
   rosterCache = new Map();
-  try { (await getDocs(collection(db, 'roster'))).forEach(d => rosterCache.set(d.id, { ad: d.data().ad, token: d.data().token || '' })); } catch (e) { toast('Roster okunamadı: ' + e.message); }
+  try { (await getDocs(collection(db, 'roster'))).forEach(d => rosterCache.set(d.id, { ad: d.data().ad, token: d.data().token || '', m: d.data().m || '' })); } catch (e) { toast('Roster okunamadı: ' + e.message); }
 }
 let rosterBusy = false, rosterAgain = false, metaCache = '';
 async function syncRoster() {
-  if (!me || !rosterCache) return;
+  if (!me || me.magaza || !rosterCache) return;
   if (rosterBusy) { rosterAgain = true; return; }
   rosterBusy = true;
   try {
@@ -321,12 +338,12 @@ async function syncRoster() {
       if (!token) { token = newToken(); upd.token = token; }                    // tokensız çalışanlara anahtar üret
       if (!e.rol) { upd.rol = g.rol; upd.sira = g.sira; }                       // rolü yazılmamışlara isme göre varsayılan
       if (Object.keys(upd).length) { bt.update(doc(db, 'employees', e.sicil), upd); n++; }
-      want.set(e.sicil, { ad: e.ad, token });
+      want.set(e.sicil, { ad: e.ad, token, m: e.magaza || '' });
       meta[e.sicil] = { r: e.rol || g.rol, s: e.sira ?? g.sira };
     }
     const metaJson = JSON.stringify(Object.fromEntries(Object.keys(meta).sort().map(k => [k, meta[k]])));
     if (metaJson !== metaCache) { bt.set(doc(db, 'meta', 'people'), { p: JSON.parse(metaJson) }); n++; }
-    for (const [sc, v] of want) { const c = rosterCache.get(sc); if (!c || c.ad !== v.ad || c.token !== v.token) { bt.set(doc(db, 'roster', sc), v); n++; } }
+    for (const [sc, v] of want) { const c = rosterCache.get(sc); if (!c || c.ad !== v.ad || c.token !== v.token || (c.m || '') !== v.m) { bt.set(doc(db, 'roster', sc), v); n++; } }
     for (const sc of rosterCache.keys()) if (!want.has(sc)) { bt.delete(doc(db, 'roster', sc)); n++; }
     if (n) { await bt.commit(); rosterCache = new Map(want); metaCache = metaJson; }
   } catch (e) { toast('Roster güncellenemedi: ' + e.message); }
@@ -337,7 +354,7 @@ async function loadSettings() {
   try { const s = await getDoc(doc(db, 'settings', 'main')); S = { ...DEF, ...(s.exists() ? s.data() : {}) }; } catch { S = { ...DEF }; }
 }
 function watchEmployees() {
-  unsubEmp = onSnapshot(collection(db, 'employees'), snap => {
+  unsubEmp = onSnapshot(me.magaza ? query(collection(db, 'employees'), where('magaza', '==', me.magaza)) : collection(db, 'employees'), snap => {
     const raw = snap.docs.map(d => ({ sicil: d.id, ...d.data() }));
     metaMap = new Map(raw.map(e => { const g = guessRole(e.ad); return [e.sicil, { r: e.rol || g.rol, s: e.sira ?? g.sira }]; }));
     employees = raw.sort(cmpPeople);
@@ -348,7 +365,10 @@ function watchEmployees() {
 /* ---------- Yönetim ---------- */
 $$('.tab').forEach(t => t.onclick = () => { adminTab = t.dataset.tab; renderAdmin(); });
 function renderAdmin() {
-  $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === adminTab));
+  if (me.magaza) adminTab = 'vardiya';                                                   // mağaza yöneticisi yalnızca Vardiya sekmesini görür
+  $$('.tab').forEach(t => { t.hidden = !!me.magaza && t.dataset.tab !== 'vardiya'; t.classList.toggle('on', t.dataset.tab === adminTab); });
+  $('#adminStore').innerHTML = !me.magaza && adminTab === 'vardiya' ? '<div class="bar"><label class="datebox">Mağaza <select class="storesel"></select></label></div>' : '';
+  renderStoreSel();
   const b = $('#adminBody');
   ({ vardiya: tabVardiya, calisan: tabCalisan, yonetici: tabYonetici, ayar: tabAyar })[adminTab](b);
 }
@@ -373,16 +393,17 @@ async function saveShifts(list, offs = []) {
   }
   const ops = [];
   const empMap = new Map(employees.map(e => [e.sicil, e]));
-  const seen = new Set(); let newEmp = 0, noTel = 0;
+  const seen = new Set(); let newEmp = 0, noTel = 0; const mgOf = sc => empMap.get(sc)?.magaza || '', mgTag = sc => ({ magaza: mgOf(sc), magazaAd: mgOf(sc) ? storeName(mgOf(sc)) : '' });
   for (const r of list) {
     if (seen.has(r.sicil)) continue; seen.add(r.sicil);
     const e = empMap.get(r.sicil), upd = {};
-    if (!e) { Object.assign(upd, { sicil: r.sicil, ad: r.ad, telefon: r.tel, tel10: tel10(r.tel), aktif: true, isAdmin: false, notify: false, token: newToken() }); newEmp++; }
+    if (me.magaza) { /* mağaza yöneticisi çalışan kaydını değiştirmez */ }
+    else if (!e) { Object.assign(upd, { sicil: r.sicil, ad: r.ad, telefon: r.tel, tel10: tel10(r.tel), aktif: true, isAdmin: false, notify: false, token: newToken() }); newEmp++; }
     else {
       if (r.tel && r.tel !== e.telefon) Object.assign(upd, { telefon: r.tel, tel10: tel10(r.tel) });
       if (!e.token) upd.token = newToken();
     }
-    if (Object.keys(upd).length) ops.push([doc(db, 'employees', r.sicil), upd]);
+    if (!me.magaza && Object.keys(upd).length) ops.push([doc(db, 'employees', r.sicil), upd]);
     if (!(r.tel || e?.telefon)) noTel++;
   }
   let count = 0;
@@ -394,13 +415,13 @@ async function saveShifts(list, offs = []) {
       const base = new Date(`${r.date}T${planned}:00+03:00`).getTime() + plus * 864e5;
       const [o, s] = type === 'giris' ? [S.girisOnce, S.girisSonra] : [S.cikisOnce, S.cikisSonra];
       const data = { date: r.date, sicil: r.sicil, ad: r.ad, type, planned, plannedAt: base,
-        windowStart: base - o * 60000, windowEnd: base + s * 60000, aralik: S.aralik, group: groupOf(r.giris) };
+        windowStart: base - o * 60000, windowEnd: base + s * 60000, aralik: S.aralik, group: groupOf(r.giris), ...mgTag(r.sicil) };
       if (!existing.has(id)) Object.assign(data, { confirmed: false, reminders: 0, lastReminderAt: 0, alertSent: false });
       ops.push([doc(db, 'attendance', id), data]); count++;
     }
   }
   for (const r of list) ops.push([doc(db, 'offdays', `${r.date}_${r.sicil}`), null]);                  // çalışıyorsa izin kaydı kalmasın
-  for (const o of offs) if (!o.types) ops.push([doc(db, 'offdays', `${o.date}_${o.sicil}`), { date: o.date, sicil: o.sicil, ad: o.ad || '' }]);
+  for (const o of offs) if (!o.types) ops.push([doc(db, 'offdays', `${o.date}_${o.sicil}`), { date: o.date, sicil: o.sicil, ad: o.ad || '', ...mgTag(o.sicil) }]);
   for (const o of offs) for (const t of (o.types || ['giris', 'cikis'])) ops.push([doc(db, 'attendance', `${o.date}_${o.sicil}_${t}`), null]);
   for (let i = 0; i < ops.length; i += 400) {
     const b = writeBatch(db);
@@ -415,7 +436,7 @@ async function saveShifts(list, offs = []) {
 
 function tabVardiya(b) {
   b.innerHTML = `
-  <div class="card" id="cardEdit"><h2>Vardiyayı Düzenle</h2>
+  <div class="card" id="cardEdit"><h2>Vardiyayı Düzenle${scope() ? ' · ' + esc(storeName(scope())) : ''}</h2>
     <p class="hint">Her hücrede üstte giriş, altta çıkış saati var; <b>08</b> yazınca otomatik dakikaya geçer. Boş hücre = izin (B). Üstteki hazır butonlarla tek dokunuşta doldurup sonraki güne geçebilirsiniz. Yalnızca giriş için üst satırı doldurun. Onaylar korunur.</p>
     <div class="rowbtn"><label class="datebox">Hafta başlangıcı <input type="date" id="edWeek" value="${mondayOf(selDate)}"></label>
       <button class="btn light small" id="btnEdLoad">Yükle</button>
@@ -469,7 +490,7 @@ async function loadEditor() {
   try {
     const snap = await getDocs(query(collection(db, 'attendance'), where('date', 'in', dates)));
     const m = new Map();
-    snap.forEach(d => { const r = d.data(); let p = m.get(r.sicil); if (!p) { p = { sicil: r.sicil, ad: r.ad, cells: Array(7).fill(null) }; m.set(r.sicil, p); }
+    snap.forEach(d => { const r = d.data(); if (!inScope(r)) return; let p = m.get(r.sicil); if (!p) { p = { sicil: r.sicil, ad: r.ad, cells: Array(7).fill(null) }; m.set(r.sicil, p); }
       const i = dates.indexOf(r.date); p.cells[i] ??= {}; p.cells[i][r.type] = r.planned; });
     const list = [...m.values()].sort(cmpPeople);
     renderEditor(ws, dates, list);
@@ -531,7 +552,7 @@ function wireTime(box) {
 function renderEditor(ws, dates, list) {
   const out = $('#edOut'), DN = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
   list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });          // ilk yüklenen değerler sabit kalsın (değişiklik tespiti için)
-  const addable = () => employees.filter(e => !list.some(p => p.sicil === e.sicil) && e.aktif !== false);
+  const addable = () => employees.filter(e => !list.some(p => p.sicil === e.sicil) && e.aktif !== false && (e.magaza || '') === scope());
   const draw = () => {
     list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });
     out.innerHTML = `${qbarHTML()}<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
@@ -578,9 +599,9 @@ async function fetchWeekMap(dates) {
   const cur = new Map();                       // "tarih|sicil" -> {giris, cikis, ad}
   for (let i = 0; i < dates.length; i += 30) {
     const snap = await getDocs(query(collection(db, 'attendance'), where('date', 'in', dates.slice(i, i + 30))));
-    snap.forEach(d => { const r = d.data(), k = r.date + '|' + r.sicil; const c = cur.get(k) || { ad: r.ad }; c[r.type] = r.planned; cur.set(k, c); });
+    snap.forEach(d => { const r = d.data(); if (!inScope(r)) return; const k = r.date + '|' + r.sicil; const c = cur.get(k) || { ad: r.ad }; c[r.type] = r.planned; cur.set(k, c); });
     const so = await getDocs(query(collection(db, 'offdays'), where('date', 'in', dates.slice(i, i + 30))));
-    so.forEach(d => { const r = d.data(), k = r.date + '|' + r.sicil; const c = cur.get(k) || { ad: r.ad }; c.off = true; cur.set(k, c); });
+    so.forEach(d => { const r = d.data(); if (!inScope(r)) return; const k = r.date + '|' + r.sicil; const c = cur.get(k) || { ad: r.ad }; c.off = true; cur.set(k, c); });
   }
   return cur;
 }
@@ -588,7 +609,7 @@ async function exportWeekXlsx() {
   const wk = $('#edWeek').value; if (!wk) return toast('Hafta seçin.');
   try {
     const ws = mondayOf(wk), dates = [...Array(7)].map((_, i) => addDays(ws, i)), X = await loadXLSX(), cur = await fetchWeekMap(dates);
-    const bySic = new Map(); employees.filter(e => e.aktif !== false).forEach(e => bySic.set(e.sicil, { ad: e.ad, tel: e.telefon || '' }));
+    const bySic = new Map(); employees.filter(e => e.aktif !== false && (e.magaza || '') === scope()).forEach(e => bySic.set(e.sicil, { ad: e.ad, tel: e.telefon || '' }));
     for (const k of cur.keys()) { const sc = k.split('|')[1]; if (!bySic.has(sc)) bySic.set(sc, { ad: cur.get(k).ad, tel: '' }); }
     const list = [...bySic].sort((a, b) => cmpPeople({ sicil: a[0], ad: a[1].ad }, { sicil: b[0], ad: b[1].ad }));
     const aoa = [['Sicil', 'Ad Soyad', 'Telefon', ...dates.map((d, i) => `${DN3[i]} ${fmtDate(d)}`)]];
@@ -614,21 +635,23 @@ async function compressImage(file) {
 }
 async function publishImage(file, weekStart) {
   const ws = mondayOf(weekStart), { url, w, h } = await compressImage(file);
-  await setDoc(doc(db, 'shiftImages', ws), { weekStart: ws, data: url, w, h, createdAt: serverTimestamp(), by: me?.ad || '' });
+  await setDoc(doc(db, 'shiftImages', imgId(ws)), { weekStart: ws, store: scope(), data: url, w, h, createdAt: serverTimestamp(), by: me?.ad || '' });
   return ws;
 }
 async function loadImgList() {
   const el = $('#imgList'); if (!el) return;
   try {
-    const snap = await getDocs(query(collection(db, 'shiftImages'), orderBy('weekStart', 'desc'), limit(8)));
+    const sc = scope();
+    const snap0 = await getDocs(sc ? query(collection(db, 'shiftImages'), where('store', '==', sc)) : query(collection(db, 'shiftImages'), orderBy('weekStart', 'desc'), limit(40)));
     if (!el.isConnected) return;
+    const snap = { docs: snap0.docs.filter(d => (d.data().store || '') === sc).sort((a, b) => b.data().weekStart.localeCompare(a.data().weekStart)).slice(0, 8) }; snap.empty = !snap.docs.length;
     el.innerHTML = snap.empty ? '<p class="empty">Henüz görsel yüklenmedi.</p>' : snap.docs.map(d => { const x = d.data(); return `<figure>
       <img src="${x.data}" alt="" data-view="${esc(d.id)}"><figcaption><b>${fmtDate(x.weekStart).slice(0, 5)} – ${fmtDate(addDays(x.weekStart, 6)).slice(0, 5)}</b>
       <button class="btn danger small" data-delimg="${esc(d.id)}">Sil</button></figcaption></figure>`; }).join('');
     el.onclick = async ev => {
       const v = ev.target.dataset.view, dl = ev.target.dataset.delimg;
       if (v) openImg(ev.target.src);
-      if (dl && confirm('Bu haftanın görseli silinsin mi?')) { await deleteDoc(doc(db, 'shiftImages', dl)).catch(x => toast(x.message)); loadImgList(); if (dl === mondayOf(selDate)) watchWeek(); }
+      if (dl && confirm('Bu haftanın görseli silinsin mi?')) { await deleteDoc(doc(db, 'shiftImages', dl)).catch(x => toast(x.message)); loadImgList(); if (dl === imgId(mondayOf(selDate))) watchWeek(); }
     };
   } catch (e) { el.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
@@ -645,10 +668,14 @@ function tabCalisan(b) {
       <label>Telefon<input id="eTel" inputmode="tel" placeholder="05xx xxx xx xx"></label>
       <label>Rol<select id="eRol"><option value="">Otomatik (isme göre)</option><option value="ms">MS</option><option value="msy">MSY</option><option value="gt">GT</option><option value="per">Personel</option></select></label>
       <label>Sıra (personel için)<input id="eSira" type="number" min="0" max="99" placeholder="1, 2, 3…"></label>
+      <label>Mağaza<select id="eMag"></select></label>
       <button class="btn">Kaydet</button>
     </form></div>
+  <div class="card"><h2>Mağazalar</h2>
+    <p class="hint">Mağaza eklediğinizde, o mağazanın çalışanları yalnızca kendi mağazalarının panosunu görür. Mevcut ekibiniz "Atatürk Cd." ekibidir ve karışmaz.</p>
+    <form class="form" id="frmStore"><label>Yeni mağaza adı<input id="stName" placeholder="Örn. Larende"></label><button class="btn light">Mağaza ekle</button></form></div>
   <div class="card"><h2>Toplu Ekle</h2>
-    <p class="hint">Her satıra bir kişi: <b>sicil;ad soyad;telefon;rol</b> (rol isteğe bağlı: ms, msy, gt veya per; boşsa isme göre atanır). Excel'den kopyalayıp yapıştırırsanız sekme ayracı da kabul edilir.</p>
+    <p class="hint">Her satıra bir kişi: <b>sicil;ad soyad;telefon;rol;mağaza</b> (rol: ms, msy, gt veya per; mağaza boşsa Atatürk Cd. ekibine eklenir, yeni mağaza adı otomatik oluşturulur). Excel'den kopyalayıp yapıştırırsanız sekme ayracı da kabul edilir.</p>
     <textarea id="bulk" rows="5" placeholder="1001;Ayşe Yılmaz;05321234567"></textarea>
     <div class="rowbtn"><button class="btn" id="btnBulk">Ekle / Güncelle</button></div></div>
   <div class="card"><h2>Çalışanlar</h2><input id="eSearch" placeholder="Ara…"><div class="tw" id="empList"></div>
@@ -658,6 +685,7 @@ function tabCalisan(b) {
     const sicil = cleanSicil($('#eSicil').value), cur = employees.find(x => x.sicil === sicil);
     const data = { sicil, ad: $('#eAd').value.trim(), telefon: $('#eTel').value.trim(), tel10: tel10($('#eTel').value), aktif: true };
     if (!cur) Object.assign(data, { isAdmin: false, notify: false });
+    data.magaza = $('#eMag').value;
     if (!cur?.token) data.token = newToken();
     if ($('#eRol').value) data.rol = $('#eRol').value;
     if ($('#eSira').value !== '') data.sira = Math.max(0, Math.min(99, +$('#eSira').value || 0));
@@ -667,34 +695,47 @@ function tabCalisan(b) {
   $('#btnBulk').onclick = async () => {
     const lines = $('#bulk').value.split(/\n/).map(l => l.split(/[;\t]/).map(x => x.trim())).filter(a => a[0]);
     if (!lines.length) return toast('Satır yok.');
-    const bt = writeBatch(db); let n = 0;
-    for (const [sc, ad, tel, rl] of lines) {
+    const bt = writeBatch(db); let n = 0; const stNew = {}, cnt = {};
+    for (const [sc, ad, tel, rl, mg] of lines) {
       const sicil = cleanSicil(sc); if (!sicil || !ad) continue;
-      const cur = employees.find(x => x.sicil === sicil);
+      const cur = employees.find(x => x.sicil === sicil), r = fold(rl), mgName = (mg || '').trim(), mgId = slug(mgName);
       const d = { sicil, ad, telefon: tel || '', tel10: tel10(tel), aktif: true };
-      if (!cur) Object.assign(d, { isAdmin: false, notify: false });
+      if (mgId) { d.magaza = mgId; stNew[mgId] = mgName; }
+      if (!cur) Object.assign(d, { isAdmin: false, notify: !!mgId && (r === 'ms' || r === 'msy') });       // mağazada MS/MSY bildirim alır
       if (!cur?.token) d.token = newToken();
-      if (ROLES[fold(rl)]) { d.rol = fold(rl); if (!cur?.rol) d.sira = guessRole(ad).sira; }
+      if (ROLES[r]) { d.rol = r; if (mgId) d.sira = r === 'ms' ? 0 : r === 'msy' ? 1 : 1 + (cnt[mgId] = (cnt[mgId] || 0) + 1); else if (!cur?.rol) d.sira = guessRole(ad).sira; }
       bt.set(doc(db, 'employees', sicil), d, { merge: true }); n++;
     }
-    try { await bt.commit(); $('#bulk').value = ''; toast(`${n} çalışan kaydedildi.`); } catch (err) { toast(err.message); }
+    try {
+      if (Object.keys(stNew).length) bt.set(doc(db, 'meta', 'stores'), { s: { ...STORES, ...stNew } }, { merge: true });
+      await bt.commit(); $('#bulk').value = ''; toast(`${n} çalışan kaydedildi.`);
+    } catch (err) { toast(err.message); }
+  };
+  $('#frmStore').onsubmit = async e => {
+    e.preventDefault(); const nm = $('#stName').value.trim(), id = slug(nm); if (!id) return;
+    try { await setDoc(doc(db, 'meta', 'stores'), { s: { ...STORES, [id]: nm } }, { merge: true }); $('#stName').value = ''; toast('Mağaza eklendi.'); } catch (err) { toast(err.message); }
   };
   $('#eSearch').oninput = renderEmpList;
-  renderEmpList();
+  renderStoreSel(); renderEmpList();
 }
 function renderEmpList() {
   const el = $('#empList'); if (!el) return;
   const q = norm($('#eSearch')?.value || '');
-  const list = employees.filter(e => !q || norm(e.ad + e.sicil + e.telefon).includes(q));
+  const list = employees.filter(e => !q || norm(e.ad + e.sicil + e.telefon + storeName(e.magaza)).includes(q));
   const rsel = e => `<select class="rsel r-${roleOf(e.sicil)}" data-rol="${esc(e.sicil)}">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}"${roleOf(e.sicil) === k ? ' selected' : ''}>${v.t}</option>`).join('')}</select>`;
-  el.innerHTML = `<table><tr><th>Sicil</th><th>Ad</th><th>Rol</th><th>Sıra</th><th>Telefon</th><th>Bot</th><th></th></tr>${
-    list.map(e => `<tr><td>${esc(e.sicil)}</td><td>${roleTag(e.sicil)}${esc(e.ad)}${e.isAdmin ? ' <span class="tag">yönetici</span>' : ''}</td><td>${rsel(e)}</td>
+  const groups = new Map(); for (const e of list) { const k = e.magaza || ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(e); }
+  const keys = ['', ...Object.keys(STORES), ...[...groups.keys()].filter(k => k && !(k in STORES))].filter(k => groups.has(k));
+  const rowH = e => `<tr><td>${esc(e.sicil)}</td><td>${roleTag(e.sicil)}${esc(e.ad)}${e.isAdmin ? ' <span class="tag">yönetici</span>' : ''}</td><td>${rsel(e)}</td>
     <td><input class="sira-in" type="number" min="0" max="99" value="${metaMap.get(e.sicil)?.s ?? 99}" data-sira="${esc(e.sicil)}"></td><td>${esc(e.telefon)}</td>
     <td>${e.telegramChatId ? '<span class="tag ok">bağlı</span>' : '<span class="tag">yok</span>'}</td>
-    <td><button class="btn light small" data-ed="${esc(e.sicil)}">Düzenle</button> <button class="btn danger small" data-del="${esc(e.sicil)}">Sil</button></td></tr>`).join('')}</table>`;
+    <td><input type="checkbox" data-nt="${esc(e.sicil)}" ${e.notify ? 'checked' : ''} style="width:auto" title="Eksik giriş/çıkış uyarısı alsın"></td>
+    <td><button class="btn light small" data-ed="${esc(e.sicil)}">Düzenle</button> <button class="btn danger small" data-del="${esc(e.sicil)}">Sil</button></td></tr>`;
+  el.innerHTML = `<table><tr><th>Sicil</th><th>Ad</th><th>Rol</th><th>Sıra</th><th>Telefon</th><th>Bot</th><th>Uyarı</th><th></th></tr>${
+    keys.map(k => `<tr class="grp"><td colspan="8">${k ? esc(storeName(k)) : 'Atatürk Cd. (mevcut ekip)'} · ${groups.get(k).length} kişi</td></tr>` + groups.get(k).map(rowH).join('')).join('')}</table>`;
   el.onchange = async ev => {
     const t = ev.target;
     if (t.dataset.rol) await updateDoc(doc(db, 'employees', t.dataset.rol), { rol: t.value }).catch(x => toast(x.message));
+    if (t.dataset.nt) await updateDoc(doc(db, 'employees', t.dataset.nt), { notify: t.checked }).catch(x => toast(x.message));
     if (t.dataset.sira) await updateDoc(doc(db, 'employees', t.dataset.sira), { sira: Math.max(0, Math.min(99, +t.value || 0)) }).catch(x => toast(x.message));
   };
   el.onclick = async ev => {
@@ -716,34 +757,47 @@ function renderEmpList() {
 function tabYonetici(b) {
   b.innerHTML = `
   <div class="card"><h2>Yönetici Ekle</h2>
-    <p class="hint">Çalışanlar listesinden seçin ve bir şifre belirleyin (en az 6 karakter). Yönetici, sicil no + bu şifre ile girer.</p>
+    <p class="hint">Çalışanlar listesinden seçin. Şifre boş bırakılırsa <b>sicil no</b> olur (5 haneli sicil için sonuna 0 eklenir, girişte yine yalnızca sicili yazmanız yeter). Mağaza çalışanı yönetici olursa yalnızca kendi mağazasının vardiyasını yönetir.</p>
     <form class="form" id="frmAdm"><label>Çalışan<select id="aSel" required></select></label>
-      <label>Şifre<input id="aPw" type="text" minlength="6" required></label><button class="btn">Yönetici yap</button></form></div>
+      <label>Şifre (isteğe bağlı)<input id="aPw" type="text" placeholder="boş = sicil no"></label><button class="btn">Yönetici yap</button></form>
+    <div class="rowbtn"><button class="btn light" id="btnAdmStores">Tüm mağaza MS / MSY'lerini yönetici yap (şifre = sicil)</button></div></div>
   <div class="card"><h2>Yöneticiler</h2><div class="tw" id="admList"></div>
     <p class="hint">"Bildirim" açık olan yöneticilere, giriş/çıkış yapılmadığında Telegram'dan uyarı gider.</p></div>`;
   $('#frmAdm').onsubmit = async e => {
     e.preventDefault();
-    const sicil = $('#aSel').value, pw = $('#aPw').value;
+    const sicil = $('#aSel').value, pw = $('#aPw').value.trim() || pwOf(sicil), emp = employees.find(x => x.sicil === sicil);
+    if (pw.length < 6) return toast('Şifre en az 6 karakter olmalı.');
     try {
-      try {
-        const sec = initializeApp(firebaseConfig, 'sec' + Date.now()), a = getAuth(sec);
-        try { await createUserWithEmailAndPassword(a, emailOf(sicil), pw); }
-        finally { await signOut(a).catch(() => { }); await deleteApp(sec); }
-      } catch (err) {
-        if (err.code !== 'auth/email-already-in-use') throw err;
-        toast('Bu sicil için hesap zaten var; yetki verildi, şifre değişmedi.');
-      }
-      await updateDoc(doc(db, 'employees', sicil), { isAdmin: true, notify: true });
-      $('#aPw').value = ''; toast('Yönetici eklendi.');
+      const st = await makeAdmin(sicil, pw, emp);
+      $('#aPw').value = ''; toast(st === 'var' ? 'Bu sicil için hesap zaten var; yetki verildi, şifre değişmedi.' : 'Yönetici eklendi.');
     } catch (err) { toast('Eklenemedi: ' + (err.code || err.message)); }
+  };
+  $('#btnAdmStores').onclick = async ev => {
+    const hasMgr = new Set(employees.filter(e => e.magaza && ['ms', 'msy'].includes(roleOf(e.sicil))).map(e => e.magaza));
+    const todo = employees.filter(e => e.magaza && !e.isAdmin && (['ms', 'msy'].includes(roleOf(e.sicil)) || !hasMgr.has(e.magaza)));
+    if (!todo.length) return toast('Yönetici yapılacak mağaza çalışanı yok.');
+    if (!confirm(`${todo.length} kişi yönetici yapılsın mı? Şifreleri sicil numaralarıdır.`)) return;
+    ev.target.disabled = true; let ok = 0, fail = 0;
+    for (const e of todo) { try { await makeAdmin(e.sicil, pwOf(e.sicil), e); ok++; } catch { fail++; } }
+    ev.target.disabled = false; toast(`${ok} kişi yönetici yapıldı` + (fail ? `, ${fail} kişide hata oldu.` : '.'));
   };
   renderAdminList();
 }
+async function makeAdmin(sicil, pw, emp) {
+  let st = 'yeni';
+  try {
+    const sec = initializeApp(firebaseConfig, 'sec' + Date.now() + sicil), a = getAuth(sec);
+    try { await createUserWithEmailAndPassword(a, emailOf(sicil), pw); }
+    finally { await signOut(a).catch(() => { }); await deleteApp(sec); }
+  } catch (err) { if (err.code !== 'auth/email-already-in-use') throw err; st = 'var'; }
+  await updateDoc(doc(db, 'employees', sicil), emp?.magaza ? { isAdmin: true } : { isAdmin: true, notify: true });
+  return st;
+}
 function renderAdminList() {
   const sel = $('#aSel'), el = $('#admList'); if (!sel || !el) return;
-  sel.innerHTML = employees.filter(e => !e.isAdmin).map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('');
-  el.innerHTML = `<table><tr><th>Ad</th><th>Sicil</th><th>Bildirim</th><th></th></tr>${
-    employees.filter(e => e.isAdmin).map(e => `<tr><td>${esc(e.ad)}</td><td>${esc(e.sicil)}</td>
+  sel.innerHTML = employees.filter(e => !e.isAdmin).map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})${e.magaza ? ' · ' + esc(storeName(e.magaza)) : ''}</option>`).join('');
+  el.innerHTML = `<table><tr><th>Ad</th><th>Sicil</th><th>Mağaza</th><th>Bildirim</th><th></th></tr>${
+    employees.filter(e => e.isAdmin).map(e => `<tr><td>${esc(e.ad)}</td><td>${esc(e.sicil)}</td><td>${esc(storeName(e.magaza))}</td>
     <td><input type="checkbox" data-nt="${esc(e.sicil)}" ${e.notify ? 'checked' : ''} style="width:auto"></td>
     <td>${e.sicil === me.sicil ? '' : `<button class="btn danger small" data-rm="${esc(e.sicil)}">Yetkiyi kaldır</button>`}</td></tr>`).join('')}</table>`;
   el.onclick = async ev => {

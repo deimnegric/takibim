@@ -1,0 +1,15 @@
+82740;Hüseyin Ergun;05448755349;ms;Larende
+310201;Kadriye;05519376991;msy;Ahmet Özcan
+55990;İlknur;05057676048;ms;Ahmet Özcan
+448333;Tuba;05535034791;per;Ahmet Özcan
+479316;İnci;05551885628;per;Ahmet Özcan
+396791;Ayşe Dilara Yalçınkaya;05514842091;msy;Gazanfer
+426961;Alime Yüzbir;05366695154;per;Gazanfer
+348512;Dilek Büyükaşçı;05424764682;ms;Gazanfer
+468963;Ayşegül Yılmaz;;per;Gazanfer
+344980;Ayşe Akdoğan;05072583430;ms;Anıt
+359130;Alime Buğur;05435796414;msy;Anıt
+313939;Münüre Güler;05523024201;per;Anıt
+403919;Hülya Elalmış;05079474245;per;Anıt
+477420;İrem Naz Turan;05523284201;per;Anıt
+402176;Seher Gültekin;05524119091;ms;Çaybaşı

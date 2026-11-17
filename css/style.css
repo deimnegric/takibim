@@ -195,3 +195,6 @@ textarea{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);b
 .tcw.isb.isb.isb{background:#dcebff;border-color:#b6d0f2}
 .tcw.full.full.full{background:#fde8e6;border-color:#f0b4af}
 .tcw.full .tp{color:#a3271f}
+
+.storesel{width:auto;max-width:200px;font-weight:600}
+#empList tr.grp td{background:#eef2f8;font-weight:700;color:#1f3a5f;padding:8px 10px;border-top:2px solid #d5dde9}

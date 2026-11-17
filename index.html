@@ -35,6 +35,7 @@
   <section id="viewDash" hidden>
     <div class="card hello" id="hello" hidden></div>
     <div class="bar">
+      <select class="storesel" id="selStore" hidden aria-label="Mağaza"></select>
       <label class="datebox">Tarih <input type="date" id="selDate"></label>
       <button class="btn small light" id="btnToday">Bugün</button>
       <button class="btn small light" id="btnNext">Sonraki gün ›</button>
@@ -62,6 +63,7 @@
       <button class="tab" data-tab="yonetici">Yöneticiler</button>
       <button class="tab" data-tab="ayar">Ayarlar</button>
     </nav>
+    <div id="adminStore"></div>
     <div id="adminBody"></div>
   </section>
 </main>
