@@ -57,3 +57,5 @@ Firestore Spark: günde 50 bin okuma / 20 bin yazma. Worker yalnızca penceresi 
 - Panel → Yöneticiler → **Tüm mağaza MS/MSY'lerini yönetici yap**: şifre = sicil no (5 haneli sicilde sonuna 0 eklenir; girişte sicil yazmak yeter). Mağaza yöneticisi yalnızca **Vardiya** sekmesini görür; kendi ekibinin vardiyasını elle girer ya da görsel yükler.
 - Giriş/çıkış yapılmadığında uyarı, o mağazadaki "Uyarı" kutusu işaretli kişilere Telegram'dan gider (kişinin kendisi hariç). Alıcı yoksa genel yöneticilere gider.
 - Bu değişiklikten sonra `firestore.rules` Firebase'e yayınlanmalı ve `worker/worker.js` Cloudflare'a yapıştırılıp Deploy edilmelidir.
+
+- Sayfa altında canlı sayaç: son 5 dk içinde açık olan cihaz sayısı (çevrimiçi) ve toplam ziyaretçi (benzersiz cihaz). `firestore.rules` yeniden yayınlanmalı.

@@ -65,6 +65,15 @@ service cloud.firestore {
     match /meta/{id} {
       allow read: if true;
       allow write: if isAdmin();
+      // Ziyaretçi sayacı: herkes yalnızca +1 artırabilir
+      allow create, update: if id == 'sayac' && request.resource.data.keys().hasOnly(['toplam']) && request.resource.data.toplam is int
+        && (resource == null ? request.resource.data.toplam == 1 : request.resource.data.toplam == resource.data.toplam + 1);
+    }
+
+    // Çevrimiçi sayacı: cihaz başına tek belge {ms: son nabız zamanı}; kimlik/ad içermez
+    match /presence/{id} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasOnly(['ms']) && request.resource.data.ms is int;
     }
 
     match /settings/{id} {

@@ -1,6 +1,6 @@
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getFirestore, collection, doc, query, where, onSnapshot, getDocs, getDoc, setDoc, updateDoc, deleteDoc,
-  writeBatch, serverTimestamp, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+  writeBatch, serverTimestamp, orderBy, limit, getCountFromServer, increment } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { firebaseConfig } from "./firebase-config.js";
@@ -826,6 +826,25 @@ function tabAyar(b) {
     try { await setDoc(doc(db, 'settings', 'main'), S); toast('Ayarlar kaydedildi.'); } catch (err) { toast(err.message); }
   };
 }
+
+/* ---------- Canlı sayaç (çevrimiçi) ve ziyaretçi sayısı ---------- */
+// Her cihaz tek belge yazar (presence/{cid}); son 5 dk içinde nabız atanlar "çevrimiçi" sayılır. Cihaz ilk kez geldiğinde ziyaretçi sayacı 1 artar.
+let cid = null, firstVisit = false;
+try { cid = localStorage.getItem('takip_cid'); if (!cid) { cid = newToken().slice(0, 20); localStorage.setItem('takip_cid', cid); firstVisit = true; } }
+catch { cid = newToken().slice(0, 20); }
+async function pulse() {
+  if (document.hidden) return;
+  try { await setDoc(doc(db, 'presence', cid), { ms: Date.now() }); } catch { }
+  try {
+    const n = await getCountFromServer(query(collection(db, 'presence'), where('ms', '>', Date.now() - 300000)));
+    const v = await getDoc(doc(db, 'meta', 'sayac'));
+    $('#footLive').textContent = Math.max(1, n.data().count);
+    $('#footVis').textContent = (v.exists() ? v.data().toplam || 0 : 0).toLocaleString('tr-TR');
+  } catch { }
+}
+if (firstVisit) setDoc(doc(db, 'meta', 'sayac'), { toplam: increment(1) }, { merge: true }).catch(() => { }).finally(pulse); else pulse();
+setInterval(pulse, 120000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pulse(); });
 
 /* ---------- Başlat ---------- */
 restoreStaff(); renderHeader(); renderDash();

@@ -198,3 +198,8 @@ textarea{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);b
 
 .storesel{width:auto;max-width:200px;font-weight:600}
 #empList tr.grp td{background:#eef2f8;font-weight:700;color:#1f3a5f;padding:8px 10px;border-top:2px solid #d5dde9}
+
+.foot{display:flex;justify-content:center;gap:18px;flex-wrap:wrap;margin:6px auto 26px;padding:0 16px;color:var(--mut);font-size:13px}
+.foot b{color:#1f3a5f}
+.foot .live{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2fa84f;margin-right:6px;animation:livep 1.8s infinite}
+@keyframes livep{0%{box-shadow:0 0 0 0 #2fa84f88}70%{box-shadow:0 0 0 7px #2fa84f00}100%{box-shadow:0 0 0 0 #2fa84f00}}
