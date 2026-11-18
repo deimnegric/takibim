@@ -78,9 +78,8 @@ export async function tick(env, now = Date.now()) {
     const path = `/attendance/${encodeURIComponent(d._id)}`, tr = d.type === 'giris' ? 'girişinizi' : 'çıkışınızı';
     if (d.windowEnd <= now) {                       // süre doldu → yöneticilere uyarı
       notifyAll ??= (await query(env, { from: [{ collectionId: 'employees' }], where: eq('notify', { booleanValue: true }) })).filter(a => a.telegramChatId);
-      const store = d.magaza || '';                    // mağaza kaydıysa o mağazanın uyarı alıcıları (kişinin kendisi hariç); yoksa genel yöneticiler
-      let admins = store ? notifyAll.filter(a => (a.magaza || '') === store && a._id !== d.sicil) : [];
-      if (!admins.length) admins = notifyAll.filter(a => a.isAdmin && !a.magaza);
+      const store = d.magaza || '';                    // mağaza kaydı: yalnızca o mağazanın uyarı alıcılarına (kişinin kendisi hariç). Genel yöneticilere başka mağazaların uyarısı GİTMEZ.
+      const admins = store ? notifyAll.filter(a => (a.magaza || '') === store && a._id !== d.sicil) : notifyAll.filter(a => a.isAdmin && !a.magaza);
       const e = await getEmp(d.sicil);
       const txt = `⚠️ ${d.magazaAd ? `[${d.magazaAd}] ` : ''}${d.ad} (${d.sicil}) ${d.planned} vardiyası için kalbim ${d.type === 'giris' ? 'girişini' : 'çıkışını'} yapmadı. Lütfen kontrol ediniz.` +
         (e?.telegramChatId ? '' : '\n(Çalışanın Telegram botu bağlı değil, hatırlatma gidememiş olabilir.)');
