@@ -203,3 +203,13 @@ textarea{font:inherit;width:100%;padding:8px 10px;border:1px solid var(--line);b
 .foot b{color:#1f3a5f}
 .foot .live{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2fa84f;margin-right:6px;animation:livep 1.8s infinite}
 @keyframes livep{0%{box-shadow:0 0 0 0 #2fa84f88}70%{box-shadow:0 0 0 7px #2fa84f00}100%{box-shadow:0 0 0 0 #2fa84f00}}
+
+.ocr th:last-child,.ocr td.tot{position:sticky;right:0;background:#fff}
+.ocr td.tot{padding:0 4px;text-align:center;box-shadow:-6px 0 8px -6px #0002}
+.totbtn{border:1.5px solid #cfe0f7;background:#eef5ff;color:#1f3a5f;border-radius:10px;padding:10px 8px;min-width:54px;cursor:pointer;font-size:16px}
+.totbtn.man{border-color:#e6b84a;background:#fff6dc}
+.totbtn.man b::after{content:' ✎';font-weight:400;font-size:12px}
+.mesai table{width:100%;font-size:13px}.mesai th,.mesai td{padding:5px 4px;text-align:center}
+.mesai .mh{width:64px;padding:6px 4px;text-align:center}
+.mesai .mtot{font-size:17px;margin:10px 0}
+h3.sub{margin:14px 0 4px;font-size:15px;color:#1f3a5f}

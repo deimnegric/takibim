@@ -42,7 +42,7 @@ const rankOf = sc => ROLES[roleOf(sc)].rank;
 const cmpPeople = (a, b) => rankOf(a.sicil) - rankOf(b.sicil) || (metaMap.get(a.sicil)?.s ?? 99) - (metaMap.get(b.sicil)?.s ?? 99) || (a.ad || '').localeCompare(b.ad || '', 'tr');
 const roleTag = sc => `<span class="rtag r-${roleOf(sc)}">${ROLES[roleOf(sc)].t}</span>`;
 
-const DEF = { girisOnce: 14, girisSonra: 15, cikisOnce: 15, cikisSonra: 15, aralik: 5 };
+const DEF = { girisOnce: 14, girisSonra: 15, cikisOnce: 15, cikisSonra: 15, aralik: 5, mola1Es: 6, mola1: 0.5, mola2Es: 9, mola2: 1, mola3: 1.5 };
 // Sabahçı: yalnızca girişi tam 08:45 olanlar. Diğer tüm girişler (10:45, 11:15, 14:15…) akşamcı sayılır.
 const SABAH_GIRIS = '08:45';
 const groupOf = t => t === SABAH_GIRIS ? 'sabah' : 'aksam';
@@ -64,7 +64,7 @@ const imgId = ws => scope() ? `${scope()}_${ws}` : ws;
 const pwOf = sc => sc.length < 6 ? sc.padEnd(6, '0') : sc;                             // Firebase en az 6 karakter ister: 82740 → 827400
 function renderStoreSel() {
   const ids = Object.keys(STORES), show = !!me && !me.magaza && ids.length > 0;
-  $$('.storesel').forEach(el => { el.hidden = !show; if (show) { el.innerHTML = '<option value="">Atatürk Cd. (mevcut ekip)</option>' + ids.map(i => `<option value="${esc(i)}">${esc(STORES[i])}</option>`).join(''); el.value = viewStore; } });
+  $$('.storesel').forEach(el => { el.hidden = !show; const lb = el.closest('label'); if (lb) lb.style.display = show ? '' : 'none'; if (show) { el.innerHTML = '<option value="">Atatürk Cd. (mevcut ekip)</option>' + ids.map(i => `<option value="${esc(i)}">${esc(STORES[i])}</option>`).join(''); el.value = viewStore; } });
   const em = $('#eMag'); if (em) { const v = em.value; em.innerHTML = '<option value="">Atatürk Cd. (mevcut ekip)</option>' + ids.map(i => `<option value="${esc(i)}">${esc(STORES[i])}</option>`).join(''); em.value = v; }
 }
 function setViewStore(v) { viewStore = v; watchRows(); renderStoreSel(); renderDash(); if (me && adminOpen) renderAdmin(); }
@@ -493,10 +493,36 @@ async function loadEditor() {
     snap.forEach(d => { const r = d.data(); if (!inScope(r)) return; let p = m.get(r.sicil); if (!p) { p = { sicil: r.sicil, ad: r.ad, cells: Array(7).fill(null) }; m.set(r.sicil, p); }
       const i = dates.indexOf(r.date); p.cells[i] ??= {}; p.cells[i][r.type] = r.planned; });
     const list = [...m.values()].sort(cmpPeople);
-    renderEditor(ws, dates, list);
+    renderEditor(ws, dates, list, await loadMesai(ws));
   } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 const cellTxt = c => !c ? 'B' : `${c.giris || ''}-${c.cikis || ''}`;
+
+/* --- Mesai hesabı: brüt süreden mola düşülür (kurallar Ayarlar'da). Varsayılan: brüt ≤6 sa → 30 dk, 6–9 sa → 1 sa, ≥9 sa → 1,5 sa --- */
+const toMin = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
+function grossOf(v) {                                                        // "08:45-16:45" -> brüt saat; yalnızca giriş / izin -> null
+  const m = /^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/.exec(v || ''); if (!m) return null;
+  const a = toMin(m[1]); let b = toMin(m[2]); if (a === null || b === null) return null;
+  if (b <= a) b += 1440; return (b - a) / 60;
+}
+const breakOf = g => g <= S.mola1Es ? S.mola1 : g < S.mola2Es ? S.mola2 : S.mola3;
+const autoNet = v => { const g = grossOf(v); return g === null ? null : Math.max(0, g - breakOf(g)); };
+const fmtH = h => String(Math.round(h * 100) / 100).replace('.', ',');
+const numH = s => { const x = parseFloat(String(s).replace(',', '.')); return isFinite(x) && x >= 0 && x <= 24 ? x : null; };
+function weekSum(vals, dates, ovDoc) {                                       // elle girilen (aynı vardiya için) değer, otomatiğin önüne geçer
+  let sum = 0, n = 0, man = false;
+  vals.forEach((v, i) => { const o = ovDoc?.d?.[dates[i]], a = autoNet(v);
+    if (o && o.p === v && typeof o.h === 'number' && a !== null) { sum += o.h; n++; man = true; } else if (a !== null) { sum += a; n++; } });
+  return { sum, n, man };
+}
+async function loadMesai(ws) {                                               // hafta için elle düzeltmeler: sicil -> {d:{tarih:{h,p}}}
+  const m = new Map();
+  try {
+    const sn = await getDocs(query(collection(db, 'mesai'), where('week', '==', ws), ...(scope() ? [where('magaza', '==', scope())] : [])));
+    sn.forEach(d => { const x = d.data(); if (inScope(x)) m.set(x.sicil, x); });
+  } catch { }
+  return m;
+}
 
 /* --- Saat hücresi: üstte giriş, altta çıkış (xx.xx); 2 hane yazınca sonraki kutuya geçer; üstte hazır vardiya butonları --- */
 const QUICK = [['08.45-16.45', '08:45-16:45'], ['11.15-21.15', '11:15-21:15'], ['14.15-21.15', '14:15-21:15']];
@@ -549,17 +575,17 @@ function wireTime(box) {
 }
 
 
-function renderEditor(ws, dates, list) {
+function renderEditor(ws, dates, list, ovs = new Map()) {
   const out = $('#edOut'), DN = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
   list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });          // ilk yüklenen değerler sabit kalsın (değişiklik tespiti için)
   const addable = () => employees.filter(e => !list.some(p => p.sicil === e.sicil) && e.aktif !== false && (e.magaza || '') === scope());
   const draw = () => {
     list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });
-    out.innerHTML = `${qbarHTML()}<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
+    out.innerHTML = `${qbarHTML()}<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}<th>Toplam<br><small>saat</small></th></tr></thead><tbody>${
       list.map((p, ri) => `<tr data-r="${ri}"><td><b>${esc(p.ad)}</b><br><small class="hint">${esc(p.sicil)}</small></td>${
         p.cells.map((c, ci) => { const t = cellTxt(c), v = t === 'B' ? '' : t, ov = p.orig[ci] === 'B' ? '' : p.orig[ci];
-          return `<td>${tcell(v, v === '' ? 'off' : v !== ov ? 'chg' : '', `data-orig="${esc(ov)}"`, v === '' && (!p.fresh || p.bm?.[ci]))}</td>`; }).join('')}</tr>`).join('') ||
-      `<tr><td colspan="8" class="empty">Bu hafta için kayıt yok. Aşağıdan kişi ekleyip saat girebilirsiniz.</td></tr>`}</tbody></table></div>
+          return `<td>${tcell(v, v === '' ? 'off' : v !== ov ? 'chg' : '', `data-orig="${esc(ov)}"`, v === '' && (!p.fresh || p.bm?.[ci]))}</td>`; }).join('')}<td class="tot"><button type="button" class="totbtn" data-tot="${ri}" title="Mola ve süreleri göster / elle düzelt"><b>–</b></button></td></tr>`).join('') ||
+      `<tr><td colspan="9" class="empty">Bu hafta için kayıt yok. Aşağıdan kişi ekleyip saat girebilirsiniz.</td></tr>`}</tbody></table></div>
       <div class="rowbtn"><select id="edAdd" style="max-width:260px"><option value="">+ Kişi ekle…</option>${addable().map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('')}</select>
       <button class="btn light" id="edAddAll">Tümünü ekle</button>
       <button class="btn" id="btnEdSave">Değişiklikleri kaydet</button></div>`;
@@ -570,8 +596,44 @@ function renderEditor(ws, dates, list) {
     out.querySelectorAll('.cell').forEach(inp => inp.oninput = () => {
       inp.className = 'cell' + (parseCell(inp.value, true) === null ? ' err' : inp.value.trim() !== inp.dataset.orig ? ' chg' : /^b?$/i.test(inp.value.trim()) ? ' off' : ''); });
     $('#btnEdSave').onclick = save;
+    out.querySelectorAll('.cell').forEach(inp => inp.addEventListener('input', () => updTot(inp.closest('tr'))));
+    out.querySelectorAll('.totbtn').forEach(b => b.onclick = () => openMesai(+b.dataset.tot));
+    out.querySelectorAll('tbody tr[data-r]').forEach(updTot);
     out._active = null; wireTime(out);
   };
+  const cellVals = tr => [...tr.querySelectorAll('.cell')].map(c => c.value.trim());
+  const updTot = tr => { if (!tr) return; const p = list[+tr.dataset.r], t = weekSum(cellVals(tr), dates, ovs.get(p.sicil)), b = tr.querySelector('.totbtn');
+    b.querySelector('b').textContent = t.n ? fmtH(t.sum) : '–'; b.classList.toggle('man', t.man); };
+  function openMesai(ri) {
+    const p = list[ri], tr = out.querySelector(`tbody tr[data-r="${ri}"]`), vals = cellVals(tr), od = ovs.get(p.sicil)?.d || {};
+    let dlg = $('#dlgMesai'); if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'dlgMesai'; document.body.appendChild(dlg); }
+    const rowsH = dates.map((d, i) => { const v = vals[i], g = grossOf(v), br = g === null ? null : breakOf(g), a = autoNet(v), o = od[d] && od[d].p === v ? od[d].h : '';
+      return `<tr><td>${DN[i]} ${fmtDate(d).slice(0, 5)}</td><td>${v ? esc(v.replace(/:/g, '.')) : 'B'}</td><td>${g === null ? '–' : fmtH(g)}</td><td>${br === null ? '–' : fmtH(br)}</td><td>${a === null ? '–' : fmtH(a)}</td>
+        <td><input class="mh" data-d="${d}" data-p="${esc(v)}" data-a="${a === null ? '' : a}" inputmode="decimal" placeholder="${a === null ? '' : fmtH(a)}" value="${o === '' ? '' : fmtH(o)}"${a === null ? ' disabled' : ''}></td></tr>`; }).join('');
+    dlg.innerHTML = `<form method="dialog" class="mesai" onsubmit="return false"><h2>${esc(p.ad)} · haftalık mesai</h2>
+      <p class="hint">Mola otomatik düşülür. "Elle" kutusunu doldurursanız o gün için yazdığınız değer geçerli olur; boş bırakırsanız otomatik hesap kullanılır. Vardiya saati değişirse elle değer silinir.</p>
+      <div class="tw"><table><tr><th>Gün</th><th>Vardiya</th><th>Brüt</th><th>Mola</th><th>Otomatik</th><th>Elle</th></tr>${rowsH}</table></div>
+      <p class="mtot">Toplam: <b id="mTot">–</b> saat</p>
+      <div class="rowbtn"><button type="button" class="btn light" id="mClose">Kapat</button><button type="button" class="btn light" id="mReset">Otomatiğe dön</button><button type="button" class="btn" id="mSave">Kaydet</button></div></form>`;
+    const inputs = [...dlg.querySelectorAll('.mh')];
+    const recalc = () => { let sum = 0, n = 0; inputs.forEach(inp => { if (inp.disabled) return; const m = inp.value.trim() === '' ? null : numH(inp.value), a = +inp.dataset.a; sum += m ?? a; n++; }); dlg.querySelector('#mTot').textContent = n ? fmtH(sum) : '–'; };
+    inputs.forEach(inp => inp.oninput = recalc); recalc();
+    dlg.querySelector('#mClose').onclick = () => dlg.close();
+    dlg.querySelector('#mReset').onclick = () => { inputs.forEach(inp => inp.value = ''); recalc(); };
+    dlg.querySelector('#mSave').onclick = async ev => {
+      const d = {}; let bad = 0;
+      inputs.forEach(inp => { if (inp.disabled || inp.value.trim() === '') return; const h = numH(inp.value); if (h === null) { bad++; return; } if (Math.abs(h - +inp.dataset.a) > 1e-9) d[inp.dataset.d] = { h, p: inp.dataset.p }; });
+      if (bad) return toast('Elle yazılan değerler 0–24 arası sayı olmalı (örn. 7,5).');
+      ev.target.disabled = true;
+      try {
+        const id = `${ws}_${p.sicil}`, mg = employees.find(x => x.sicil === p.sicil)?.magaza || '';
+        if (Object.keys(d).length) { await setDoc(doc(db, 'mesai', id), { week: ws, sicil: p.sicil, magaza: mg, d }); ovs.set(p.sicil, { week: ws, sicil: p.sicil, magaza: mg, d }); }
+        else { await deleteDoc(doc(db, 'mesai', id)); ovs.delete(p.sicil); }
+        updTot(tr); dlg.close(); toast('Mesai kaydedildi.');
+      } catch (err) { toast('Kaydedilemedi: ' + err.message); } finally { ev.target.disabled = false; }
+    };
+    dlg.showModal();
+  }
   const keep = () => out.querySelectorAll('tbody tr[data-r]').forEach(tr => { const p = list[+tr.dataset.r]; p.bm = [...tr.querySelectorAll('.tcw')].map(w => w.classList.contains('isb'));
     [...tr.querySelectorAll('.cell')].forEach((c, i) => { const v = parseCell(c.value, true); if (v && v !== 'off') p.cells[i] = { giris: v.giris, cikis: v.cikis }; else if (v === 'off') p.cells[i] = null; }); });
   const save = async ev => {
@@ -612,9 +674,10 @@ async function exportWeekXlsx() {
     const bySic = new Map(); employees.filter(e => e.aktif !== false && (e.magaza || '') === scope()).forEach(e => bySic.set(e.sicil, { ad: e.ad, tel: e.telefon || '' }));
     for (const k of cur.keys()) { const sc = k.split('|')[1]; if (!bySic.has(sc)) bySic.set(sc, { ad: cur.get(k).ad, tel: '' }); }
     const list = [...bySic].sort((a, b) => cmpPeople({ sicil: a[0], ad: a[1].ad }, { sicil: b[0], ad: b[1].ad }));
-    const aoa = [['Sicil', 'Ad Soyad', 'Telefon', ...dates.map((d, i) => `${DN3[i]} ${fmtDate(d)}`)]];
-    for (const [sc, e] of list) aoa.push([sc, e.ad, e.tel, ...dates.map(d => { const c = cur.get(d + '|' + sc); return c && (c.giris || c.cikis) ? `${c.giris || ''}-${c.cikis || ''}` : 'B'; })]);
-    const sheet = X.utils.aoa_to_sheet(aoa); sheet['!cols'] = [{ wch: 9 }, { wch: 24 }, { wch: 14 }, ...dates.map(() => { return { wch: 14 }; })];
+    const mes = await loadMesai(ws), aoa = [['Sicil', 'Ad Soyad', 'Telefon', ...dates.map((d, i) => `${DN3[i]} ${fmtDate(d)}`), 'Toplam (saat)']];
+    for (const [sc, e] of list) { const vv = dates.map(d => { const c = cur.get(d + '|' + sc); return c && c.giris && c.cikis ? `${c.giris}-${c.cikis}` : ''; });
+      aoa.push([sc, e.ad, e.tel, ...dates.map(d => { const c = cur.get(d + '|' + sc); return c && (c.giris || c.cikis) ? `${c.giris || ''}-${c.cikis || ''}` : 'B'; }), weekSum(vv, dates, mes.get(sc)).sum]); }
+    const sheet = X.utils.aoa_to_sheet(aoa); sheet['!cols'] = [{ wch: 9 }, { wch: 24 }, { wch: 14 }, ...dates.map(() => { return { wch: 14 }; }), { wch: 13 }];
     const help = X.utils.aoa_to_sheet([['Nasıl düzenlenir?'], ['Hücre biçimi: 08:45-16:45  (giriş-çıkış)'], ['Yalnızca giriş: 08:45-'], ['İzin: B yazın veya boş bırakın'],
       ['Yeni kişi eklemek için Sicil, Ad Soyad ve Telefon yazın.'], ['İlk satırdaki tarih başlıklarını değiştirmeyin.'], ['Düzenlediğiniz dosyayı panelden "Düzenlenmiş Excel\'i yükle" ile geri yükleyin.']]);
     const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, sheet, 'Vardiya'); X.utils.book_append_sheet(wb, help, 'Yardım');
@@ -812,17 +875,25 @@ function renderAdminList() {
 /* --- Ayarlar --- */
 function tabAyar(b) {
   b.innerHTML = `<div class="card"><h2>Ayarlar</h2>
-    <p class="hint">Değişiklikler yalnızca bundan sonra yüklenen vardiyalara uygulanır.</p>
+    <p class="hint">Giriş/çıkış pencereleri ve hatırlatma değişiklikleri yalnızca bundan sonra yüklenen vardiyalara uygulanır.</p>
     <form class="form" id="frmSet">
       <label>Giriş: kaç dk önce başlasın<input type="number" id="s1" min="0" max="120" value="${S.girisOnce}"></label>
       <label>Giriş: kaç dk sonra bitsin<input type="number" id="s2" min="0" max="120" value="${S.girisSonra}"></label>
       <label>Çıkış: kaç dk önce başlasın<input type="number" id="s3" min="0" max="120" value="${S.cikisOnce}"></label>
       <label>Çıkış: kaç dk sonra bitsin<input type="number" id="s4" min="0" max="120" value="${S.cikisSonra}"></label>
       <label>Hatırlatma aralığı (dk)<input type="number" id="s5" min="1" max="60" value="${S.aralik}"></label>
+      <h3 class="sub">Mola kuralları (mesai hesabı)</h3>
+      <label>Brüt süre şu saate kadar (dahil)<input type="number" id="m1e" step="0.25" min="0" max="24" value="${S.mola1Es}"></label>
+      <label>…mola (saat)<input type="number" id="m1" step="0.25" min="0" max="5" value="${S.mola1}"></label>
+      <label>Brüt süre şu saatten kısa<input type="number" id="m2e" step="0.25" min="0" max="24" value="${S.mola2Es}"></label>
+      <label>…mola (saat)<input type="number" id="m2" step="0.25" min="0" max="5" value="${S.mola2}"></label>
+      <label>Daha uzun vardiyalarda mola (saat)<input type="number" id="m3" step="0.25" min="0" max="5" value="${S.mola3}"></label>
+      <p class="hint">Örnek (varsayılan): 16.45–21.15 → brüt 4,5, mola 0,5, mesai 4. 13.15–21.15 → brüt 8, mola 1, mesai 7. 11.15–21.15 → brüt 10, mola 1,5, mesai 8,5. Mola kuralları anında geçerlidir.</p>
       <button class="btn">Kaydet</button></form></div>`;
   $('#frmSet').onsubmit = async e => {
     e.preventDefault();
-    S = { girisOnce: +$('#s1').value, girisSonra: +$('#s2').value, cikisOnce: +$('#s3').value, cikisSonra: +$('#s4').value, aralik: +$('#s5').value };
+    S = { girisOnce: +$('#s1').value, girisSonra: +$('#s2').value, cikisOnce: +$('#s3').value, cikisSonra: +$('#s4').value, aralik: +$('#s5').value,
+      mola1Es: +$('#m1e').value, mola1: +$('#m1').value, mola2Es: +$('#m2e').value, mola2: +$('#m2').value, mola3: +$('#m3').value };
     try { await setDoc(doc(db, 'settings', 'main'), S); toast('Ayarlar kaydedildi.'); } catch (err) { toast(err.message); }
   };
 }

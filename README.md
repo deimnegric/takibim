@@ -59,3 +59,5 @@ Firestore Spark: günde 50 bin okuma / 20 bin yazma. Worker yalnızca penceresi 
 - Bu değişiklikten sonra `firestore.rules` Firebase'e yayınlanmalı ve `worker/worker.js` Cloudflare'a yapıştırılıp Deploy edilmelidir.
 
 - Sayfa altında canlı sayaç: son 5 dk içinde açık olan cihaz sayısı (çevrimiçi) ve toplam ziyaretçi (benzersiz cihaz). `firestore.rules` yeniden yayınlanmalı.
+
+- Vardiya tablosunda her satırın sonunda **Toplam** (haftalık net mesai saati) görünür. Mola otomatik düşülür (kurallar Ayarlar'da), dokunup günlük elle düzeltme yapılabilir. `firestore.rules` yeniden yayınlanmalı.

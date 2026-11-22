@@ -70,6 +70,15 @@ service cloud.firestore {
         && (resource == null ? request.resource.data.toplam == 1 : request.resource.data.toplam == resource.data.toplam + 1);
     }
 
+    // Haftalık mesai düzeltmeleri (elle girilen saatler): yönetici ve kendi mağazasının yöneticisi
+    match /mesai/{id} {
+      allow read, write: if isAdmin();
+      allow read: if isStoreAdmin() && resource.data.magaza == store();
+      allow create: if isStoreAdmin() && request.resource.data.magaza == store();
+      allow update: if isStoreAdmin() && resource.data.magaza == store() && request.resource.data.magaza == store();
+      allow delete: if isStoreAdmin() && resource.data.magaza == store();
+    }
+
     // Çevrimiçi sayacı: cihaz başına tek belge {ms: son nabız zamanı}; kimlik/ad içermez
     match /presence/{id} {
       allow read: if true;
