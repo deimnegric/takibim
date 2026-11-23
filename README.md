@@ -61,3 +61,6 @@ Firestore Spark: günde 50 bin okuma / 20 bin yazma. Worker yalnızca penceresi 
 - Sayfa altında canlı sayaç: son 5 dk içinde açık olan cihaz sayısı (çevrimiçi) ve toplam ziyaretçi (benzersiz cihaz). `firestore.rules` yeniden yayınlanmalı.
 
 - Vardiya tablosunda her satırın sonunda **Toplam** (haftalık net mesai saati) görünür. Mola otomatik düşülür (kurallar Ayarlar'da), dokunup günlük elle düzeltme yapılabilir. `firestore.rules` yeniden yayınlanmalı.
+
+- **Aylık saat hedefi** (yalnızca genel yönetici görür): tam personel 195 sa, part en çok 127,5 sa (Çalışanlar sekmesinden kişi bazında düşürülür; varsayılan part: Kübra, Selçuk, Gönül). Vardiya tablosunda haftalık toplamın altında soluk sayı = aylık hedeften kalan saat (Göster/Gizle düğmesi var). Rapor/yıllık izin/resmi kapalı gün için sayıya dokunup düzeltme girilir (gün başına 7,5 sa düşer). Ayarlar'dan hesap başlangıç ayı: 2026-12.
+- Vardiya görseli yükleme kaldırıldı. Ana ekranın en altında **Haftalık Vardiya** tablosu vardiya girişinden canlı oluşur; geçmiş ve gelecek haftalar ‹ › ile gezilir. `firestore.rules` yeniden yayınlanmalı.

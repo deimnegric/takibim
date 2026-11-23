@@ -42,15 +42,15 @@ const rankOf = sc => ROLES[roleOf(sc)].rank;
 const cmpPeople = (a, b) => rankOf(a.sicil) - rankOf(b.sicil) || (metaMap.get(a.sicil)?.s ?? 99) - (metaMap.get(b.sicil)?.s ?? 99) || (a.ad || '').localeCompare(b.ad || '', 'tr');
 const roleTag = sc => `<span class="rtag r-${roleOf(sc)}">${ROLES[roleOf(sc)].t}</span>`;
 
-const DEF = { girisOnce: 14, girisSonra: 15, cikisOnce: 15, cikisSonra: 15, aralik: 5, mola1Es: 6, mola1: 0.5, mola2Es: 9, mola2: 1, mola3: 1.5 };
+const DEF = { girisOnce: 14, girisSonra: 15, cikisOnce: 15, cikisSonra: 15, aralik: 5, mola1Es: 6, mola1: 0.5, mola2Es: 9, mola2: 1, mola3: 1.5, tamAy: 195, partAy: 127.5, gunSaat: 7.5, sayacBas: '2026-12' };
 // Sabahçı: yalnızca girişi tam 08:45 olanlar. Diğer tüm girişler (10:45, 11:15, 14:15…) akşamcı sayılır.
 const SABAH_GIRIS = '08:45';
 const groupOf = t => t === SABAH_GIRIS ? 'sabah' : 'aksam';
 let S = { ...DEF };
 let rows = [], employees = [], me = null, selDate = todayStr();
 let unsubRows = null, unsubEmp = null, adminTab = 'vardiya', parsed = null;
-let staff = null, mine = [], weekDoc = null, adminOpen = false, curToday = todayStr(), rosterCache = null, ocrFile = null;
-let unsubMine = null, weekSeq = 0, unsubOff = null, offRows = [], mineOff = false;
+let staff = null, mine = [], adminOpen = false, curToday = todayStr(), rosterCache = null, ocrFile = null;
+let unsubMine = null, unsubOff = null, offRows = [], mineOff = false;
 const ready = { staff: false, auth: false };
 const authorized = () => !!(me || staff);
 const mySicil = () => me?.sicil || staff?.sicil || null;
@@ -60,7 +60,6 @@ const slug = s => fold(s).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const storeName = id => id ? (STORES[id] || id) : 'Atatürk Cd.';
 const scope = () => me ? (me.magaza || viewStore) : staff ? (staff.m || '') : '';
 const inScope = r => (r.magaza || '') === scope();
-const imgId = ws => scope() ? `${scope()}_${ws}` : ws;
 const pwOf = sc => sc.length < 6 ? sc.padEnd(6, '0') : sc;                             // Firebase en az 6 karakter ister: 82740 → 827400
 function renderStoreSel() {
   const ids = Object.keys(STORES), show = !!me && !me.magaza && ids.length > 0;
@@ -98,12 +97,7 @@ function watchRows() {
   unsubOff?.(); offRows = [];
   unsubOff = onSnapshot(query(collection(db, 'offdays'), ...qw),
     snap => { offRows = snap.docs.map(d => d.data()).filter(inScope); renderDash(); }, () => { });
-  watchWeek();
-}
-async function watchWeek() {
-  const seq = ++weekSeq; weekDoc = null; renderWeek();
-  try { const d = await getDoc(doc(db, 'shiftImages', imgId(mondayOf(selDate)))); if (seq === weekSeq) { weekDoc = d.exists() ? d.data() : null; renderWeek(); } }
-  catch { if (seq === weekSeq) renderWeek(); }
+  wkStart = mondayOf(selDate); watchWk();
 }
 function watchMine() {
   unsubMine?.(); unsubMine = null; mine = []; mineOff = false; curToday = todayStr();
@@ -113,7 +107,7 @@ function watchMine() {
     snap => { mine = snap.docs.map(d => ({ id: d.id, ...d.data() })); renderHello(); }, () => renderHello());
 }
 function startData() {
-  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubOff?.(); unsubMeta?.(); unsubStores?.(); unsubRows = unsubMine = unsubOff = unsubMeta = unsubStores = null; rows = []; mine = []; offRows = []; weekDoc = null; return; }
+  if (!authorized()) { unsubRows?.(); unsubMine?.(); unsubOff?.(); unsubMeta?.(); unsubStores?.(); wkUnsubs.forEach(u => u?.()); wkUnsubs = []; unsubRows = unsubMine = unsubOff = unsubMeta = unsubStores = null; rows = []; mine = []; offRows = []; wkAtt = []; wkOff = []; return; }
   watchRows(); watchMeta();
 }
 function watchMeta() {
@@ -138,15 +132,39 @@ function renderHello() {
          : mineOff ? `<p class="hello-line">${isTd ? 'Bugün' : dayLbl} izinlisiniz.</p>` : `<p class="hello-line muted">${isTd ? 'Bugün' : dayLbl} için vardiya kaydınız yok (izinli olabilirsiniz).</p>`);
 }
 
-function renderWeek() {
-  const el = $('#cardWeek'), ws = mondayOf(selDate);
-  if (!weekDoc) { el.hidden = !me; el.innerHTML = me ? `<h2>Haftalık Vardiya</h2><p class="empty">Bu hafta için görsel yüklenmemiş (${fmtDate(ws)} haftası).</p>` : ''; return; }
-  el.hidden = false;
-  el.innerHTML = `<h2>Haftalık Vardiya <small>${fmtDate(ws).slice(0, 5)} – ${fmtDate(addDays(ws, 6)).slice(0, 5)}</small></h2>
-    <img class="weekimg" src="${weekDoc.data}" alt="Haftalık vardiya" width="${weekDoc.w || ''}" height="${weekDoc.h || ''}"><p class="hint">Büyütmek için görsele dokunun.</p>`;
-  el.querySelector('img').onclick = () => openImg(weekDoc.data);
+/* ---------- Haftalık vardiya (canlı): vardiya kaydedildikçe otomatik güncellenir; geçmiş/gelecek haftalar gezilebilir ---------- */
+let wkStart = mondayOf(todayStr()), wkUnsubs = [], wkAtt = [], wkOff = [];
+function watchWk() {
+  wkUnsubs.forEach(u => u?.()); wkUnsubs = []; wkAtt = []; wkOff = [];
+  if (authorized()) {
+    const dates = [...Array(7)].map((_, i) => addDays(wkStart, i)), sc = scope();
+    const mk = (coll, set, strict) => wkUnsubs.push(onSnapshot(query(collection(db, coll), where('date', 'in', dates), ...(strict && sc ? [where('magaza', '==', sc)] : [])),
+      snap => { set(snap.docs.map(d => d.data()).filter(inScope)); renderWeek(); },
+      () => { if (strict && sc) mk(coll, set, false); }));                    // dizin gerekirse yalnızca tarihe göre dinle, kapsamı istemcide süz
+    mk('attendance', v => { wkAtt = v; }, true); mk('offdays', v => { wkOff = v; }, true);
+  }
+  renderWeek();
 }
-function openImg(src) { $('#imgBig').src = src; $('#dlgImg').showModal(); }
+function renderWeek() {
+  const el = $('#cardWeek'); if (!authorized()) { el.hidden = true; return; }
+  el.hidden = false;
+  const ws = wkStart, dates = [...Array(7)].map((_, i) => addDays(ws, i)), DN = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'], td = todayStr(), mineSc = mySicil();
+  const per = new Map(), P = r => { let x = per.get(r.sicil); if (!x) { x = { sicil: r.sicil, ad: r.ad || r.sicil, c: {} }; per.set(r.sicil, x); } return x; };
+  for (const r of wkAtt) { const c = (P(r).c[r.date] ??= {}); c[r.type] = r.planned; }
+  for (const r of wkOff) { const c = (P(r).c[r.date] ??= {}); c.off = true; }
+  const list = [...per.values()].sort(cmpPeople), t = x => x.replace(':', '.');
+  const cell = c => c && (c.giris || c.cikis)
+    ? `<td class="wc${c.giris === SABAH_GIRIS && c.cikis === '21:15' ? ' full' : ''}"><span>${c.giris ? t(c.giris) : '–'}</span><span>${c.cikis ? t(c.cikis) : '–'}</span></td>`
+    : c?.off ? '<td class="wc wb">B</td>' : '<td class="wc wn">·</td>';
+  el.innerHTML = `<div class="wkhead"><h2>Haftalık Vardiya${scope() ? ' · ' + esc(storeName(scope())) : ''}</h2>
+    <div class="wknav"><button class="btn light small" data-wk="-1" aria-label="Önceki hafta">‹</button><b>${fmtDate(ws).slice(0, 5)} – ${fmtDate(addDays(ws, 6)).slice(0, 5)}</b>
+    <button class="btn light small" data-wk="1" aria-label="Sonraki hafta">›</button>${ws === mondayOf(td) ? '' : '<button class="btn light small" data-wk="0">Bu hafta</button>'}</div></div>
+    ${list.length ? `<div class="tw wkt"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th class="${dates[i] === td ? 'today' : ''}">${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
+      list.map(p => `<tr class="${p.sicil === mineSc ? 'me' : ''}"><td class="wn1">${esc(p.ad)}</td>${dates.map(d => cell(p.c[d])).join('')}</tr>`).join('')}</tbody></table></div>`
+      : '<p class="empty">Bu hafta için vardiya girilmemiş.</p>'}
+    <p class="hint">Vardiya kaydedildiğinde otomatik güncellenir. Geçmiş ve gelecek haftalar için okları kullanın.</p>`;
+  el.onclick = ev => { const b = ev.target.closest('[data-wk]'); if (!b) return; const k = +b.dataset.wk; wkStart = k === 0 ? mondayOf(todayStr()) : addDays(wkStart, 7 * k); watchWk(); };
+}
 
 function people() {
   const m = new Map();
@@ -443,24 +461,11 @@ function tabVardiya(b) {
       <button class="btn light small" id="btnEdXlsx">Excel'e indir</button></div>
     <p class="hint">Yeni hafta için tarihi seçip <b>Yükle</b>'ye basın, <b>Tümünü ekle</b> ile çalışanları getirin ve saatleri yazın. Excel'e indir yalnızca yedek/rapor içindir.</p>
     <div id="edOut"></div></div>
-  <div class="card"><h2>Vardiya Görselleri</h2>
-    <p class="hint">Yüklediğiniz görsel, tüm çalışanlara "Haftalık Vardiya" olarak görünür. Aynı haftaya yeniden yüklerseniz eskisinin yerine geçer.</p>
-    <div class="form"><label>Hafta başlangıcı (Pazartesi)<input type="date" id="imgWeek" value="${mondayOf(selDate)}"></label>
-      <label>Görsel<input type="file" id="imgFile" accept="image/*"></label><button class="btn" id="btnImgPub">Yayınla</button></div>
-    <div id="imgList" class="imglist"></div></div>
   <div class="card"><h2>Seçili gün: ${fmtDate(selDate)}</h2>
     <div class="rowbtn"><button class="btn" id="btnExp">Excel'e aktar</button><button class="btn danger" id="btnDelDay">Bu günün vardiyasını sil</button></div></div>`;
 
   $('#edWeek').onchange = loadEditor; $('#btnEdLoad').onclick = loadEditor; loadEditor();
   $('#btnEdXlsx').onclick = exportWeekXlsx;
-  $('#btnImgPub').onclick = async ev => {
-    const f = $('#imgFile').files[0], w = $('#imgWeek').value;
-    if (!f || !w) return toast('Hafta ve görsel seçin.');
-    ev.target.disabled = true;
-    try { await publishImage(f, w); toast('Görsel yayınlandı.'); $('#imgFile').value = ''; loadImgList(); if (mondayOf(w) === mondayOf(selDate)) watchWeek(); }
-    catch (err) { toast('Yüklenemedi: ' + err.message); } finally { ev.target.disabled = false; }
-  };
-  loadImgList();
   $('#btnExp').onclick = async () => {
     if (!rows.length) return toast('Bu günde kayıt yok.');
     const X = await loadXLSX();
@@ -493,7 +498,7 @@ async function loadEditor() {
     snap.forEach(d => { const r = d.data(); if (!inScope(r)) return; let p = m.get(r.sicil); if (!p) { p = { sicil: r.sicil, ad: r.ad, cells: Array(7).fill(null) }; m.set(r.sicil, p); }
       const i = dates.indexOf(r.date); p.cells[i] ??= {}; p.cells[i][r.type] = r.planned; });
     const list = [...m.values()].sort(cmpPeople);
-    renderEditor(ws, dates, list, await loadMesai(ws));
+    renderEditor(ws, dates, list, await loadMesai(ws), await loadMonthCtx(ws));
   } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 const cellTxt = c => !c ? 'B' : `${c.giris || ''}-${c.cikis || ''}`;
@@ -507,6 +512,32 @@ function grossOf(v) {                                                        // 
 }
 const breakOf = g => g <= S.mola1Es ? S.mola1 : g < S.mola2Es ? S.mola2 : S.mola3;
 const autoNet = v => { const g = grossOf(v); return g === null ? null : Math.max(0, g - breakOf(g)); };
+/* --- Aylık saat hedefi: tam personel 195 sa, part en çok 127,5 sa (kişiye göre düşürülebilir). Rapor/yıllık izin/resmi kapalı gün başına 7,5 sa hedeften düşer. --- */
+const PART_DEF = new Set(['kubra', 'selcuk', 'gonul']);                        // Atatürk Cd. ekibinde varsayılan part personel (Çalışanlar listesinden değiştirilebilir)
+const tipOf = e => e?.tip || (e && !e.magaza && PART_DEF.has(fold(e.ad || '').split(' ')[0]) ? 'part' : 'tam');
+const limitOf = e => typeof e?.limit === 'number' && e.limit > 0 ? e.limit : tipOf(e) === 'part' ? S.partAy : S.tamAy;
+const targetOf = (e, ctx) => { const a = ctx.aylik.get(e.sicil); return a && typeof a.hedef === 'number' ? a.hedef : Math.max(0, limitOf(e) - ((a?.gun || 0) + ctx.gunAll) * S.gunSaat); };
+const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+const monthLabel = m => `${MONTHS[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}`;
+const showKal = () => { try { return localStorage.getItem('takip_kalan') !== '0'; } catch { return true; } };
+const setKal = v => { try { localStorage.setItem('takip_kalan', v ? '1' : '0'); } catch { } };
+const numG = s => { const x = parseFloat(String(s).replace(',', '.')); return isFinite(x) && x >= 0 && x <= 31 ? x : null; };
+async function loadMonthCtx(ws) {                                              // yalnızca genel yönetici: ayın önceki haftalarındaki çalışılan saat + aylık düzeltmeler
+  if (!me || me.magaza) return null;
+  const M = addDays(ws, 6).slice(0, 7); if (M < S.sayacBas) return null;
+  const mStart = M + '-01', ctx = { M, prev: new Map(), aylik: new Map(), gunAll: 0 };
+  try {
+    if (mStart < ws) {
+      const per = new Map(), ovd = new Map();
+      (await getDocs(query(collection(db, 'attendance'), where('date', '>=', mStart), where('date', '<', ws)))).forEach(d => { const r = d.data(); if (!inScope(r)) return; const k = r.sicil + '|' + r.date; const c = per.get(k) || {}; c[r.type] = r.planned; per.set(k, c); });
+      (await getDocs(query(collection(db, 'mesai'), where('week', '>=', mondayOf(mStart)), where('week', '<', ws)))).forEach(d => { const x = d.data(); ovd.set(x.sicil, { ...(ovd.get(x.sicil) || {}), ...x.d }); });
+      for (const [k, c] of per) { const [sc, date] = k.split('|'); if (date < mStart) continue; const v = c.giris && c.cikis ? `${c.giris}-${c.cikis}` : '', a = autoNet(v), o = ovd.get(sc)?.[date];
+        if (a !== null) ctx.prev.set(sc, (ctx.prev.get(sc) || 0) + (o && o.p === v && typeof o.h === 'number' ? o.h : a)); }
+    }
+    (await getDocs(query(collection(db, 'aylik'), where('month', '==', M)))).forEach(d => { const x = d.data(); if (x.sicil === 'ALL') ctx.gunAll = +x.gun || 0; else ctx.aylik.set(x.sicil, x); });
+  } catch (e) { ctx.err = e.message; }
+  return ctx;
+}
 const fmtH = h => String(Math.round(h * 100) / 100).replace('.', ',');
 const numH = s => { const x = parseFloat(String(s).replace(',', '.')); return isFinite(x) && x >= 0 && x <= 24 ? x : null; };
 function weekSum(vals, dates, ovDoc) {                                       // elle girilen (aynı vardiya için) değer, otomatiğin önüne geçer
@@ -575,16 +606,16 @@ function wireTime(box) {
 }
 
 
-function renderEditor(ws, dates, list, ovs = new Map()) {
+function renderEditor(ws, dates, list, ovs = new Map(), ctx = null) {
   const out = $('#edOut'), DN = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
   list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });          // ilk yüklenen değerler sabit kalsın (değişiklik tespiti için)
   const addable = () => employees.filter(e => !list.some(p => p.sicil === e.sicil) && e.aktif !== false && (e.magaza || '') === scope());
   const draw = () => {
     list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });
-    out.innerHTML = `${qbarHTML()}<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}<th>Toplam<br><small>saat</small></th></tr></thead><tbody>${
+    out.innerHTML = `${qbarHTML()}${ctx && !ctx.err ? `<div class="rowbtn"><button type="button" class="btn light small" id="btnKal">${showKal() ? 'Aylık kalanı gizle' : 'Aylık kalanı göster'}</button><span class="hint">${monthLabel(ctx.M)} · soluk sayı: aylık hedeften kalan saat</span></div>` : me && !me.magaza ? `<p class="hint">Aylık kalan saat ${monthLabel(S.sayacBas)} ayından itibaren hesaplanır.</p>` : ''}<div class="tw ocr"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th>${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}<th>Toplam<br><small>saat</small></th></tr></thead><tbody>${
       list.map((p, ri) => `<tr data-r="${ri}"><td><b>${esc(p.ad)}</b><br><small class="hint">${esc(p.sicil)}</small></td>${
         p.cells.map((c, ci) => { const t = cellTxt(c), v = t === 'B' ? '' : t, ov = p.orig[ci] === 'B' ? '' : p.orig[ci];
-          return `<td>${tcell(v, v === '' ? 'off' : v !== ov ? 'chg' : '', `data-orig="${esc(ov)}"`, v === '' && (!p.fresh || p.bm?.[ci]))}</td>`; }).join('')}<td class="tot"><button type="button" class="totbtn" data-tot="${ri}" title="Mola ve süreleri göster / elle düzelt"><b>–</b></button></td></tr>`).join('') ||
+          return `<td>${tcell(v, v === '' ? 'off' : v !== ov ? 'chg' : '', `data-orig="${esc(ov)}"`, v === '' && (!p.fresh || p.bm?.[ci]))}</td>`; }).join('')}<td class="tot"><button type="button" class="totbtn" data-tot="${ri}" title="Mola ve süreleri göster / elle düzelt"><b>–</b></button><button type="button" class="kalan" data-kal="${ri}" hidden title="Aylık kalan saat — ayrıntı ve düzeltme için dokunun"></button></td></tr>`).join('') ||
       `<tr><td colspan="9" class="empty">Bu hafta için kayıt yok. Aşağıdan kişi ekleyip saat girebilirsiniz.</td></tr>`}</tbody></table></div>
       <div class="rowbtn"><select id="edAdd" style="max-width:260px"><option value="">+ Kişi ekle…</option>${addable().map(e => `<option value="${esc(e.sicil)}">${esc(e.ad)} (${esc(e.sicil)})</option>`).join('')}</select>
       <button class="btn light" id="edAddAll">Tümünü ekle</button>
@@ -598,12 +629,51 @@ function renderEditor(ws, dates, list, ovs = new Map()) {
     $('#btnEdSave').onclick = save;
     out.querySelectorAll('.cell').forEach(inp => inp.addEventListener('input', () => updTot(inp.closest('tr'))));
     out.querySelectorAll('.totbtn').forEach(b => b.onclick = () => openMesai(+b.dataset.tot));
+    out.querySelectorAll('.kalan').forEach(b => b.onclick = () => openAylik(+b.dataset.kal));
+    const bk = $('#btnKal'); if (bk) bk.onclick = () => { setKal(!showKal()); bk.textContent = showKal() ? 'Aylık kalanı gizle' : 'Aylık kalanı göster'; out.querySelectorAll('tbody tr[data-r]').forEach(updTot); };
     out.querySelectorAll('tbody tr[data-r]').forEach(updTot);
     out._active = null; wireTime(out);
   };
   const cellVals = tr => [...tr.querySelectorAll('.cell')].map(c => c.value.trim());
   const updTot = tr => { if (!tr) return; const p = list[+tr.dataset.r], t = weekSum(cellVals(tr), dates, ovs.get(p.sicil)), b = tr.querySelector('.totbtn');
-    b.querySelector('b').textContent = t.n ? fmtH(t.sum) : '–'; b.classList.toggle('man', t.man); };
+    b.querySelector('b').textContent = t.n ? fmtH(t.sum) : '–'; b.classList.toggle('man', t.man);
+    const kb = tr.querySelector('.kalan'), k = kalanOf(p.sicil, cellVals(tr)); if (!kb) return;
+    kb.hidden = k === null || !showKal(); if (k !== null) { kb.textContent = fmtH(k); kb.classList.toggle('neg', k < 0); } };
+  const kalanOf = (sc, vals) => {
+    if (!ctx || ctx.err) return null; const e = employees.find(x => x.sicil === sc); if (!e) return null;
+    const mStart = ctx.M + '-01', sub = weekSum(vals.map((v, i) => dates[i] >= mStart ? v : ''), dates, ovs.get(sc));
+    return targetOf(e, ctx) - ((ctx.prev.get(sc) || 0) + sub.sum);
+  };
+  function openAylik(ri) {
+    const p = list[ri], e = employees.find(x => x.sicil === p.sicil), tr = out.querySelector(`tbody tr[data-r="${ri}"]`); if (!e || !ctx) return;
+    const a = ctx.aylik.get(p.sicil) || {}, mStart = ctx.M + '-01', vals = cellVals(tr);
+    const done = (ctx.prev.get(p.sicil) || 0) + weekSum(vals.map((v, i) => dates[i] >= mStart ? v : ''), dates, ovs.get(p.sicil)).sum;
+    let dlg = $('#dlgAylik'); if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'dlgAylik'; document.body.appendChild(dlg); }
+    dlg.innerHTML = `<form method="dialog" class="mesai" onsubmit="return false"><h2>${esc(p.ad)} · ${monthLabel(ctx.M)}</h2>
+      <p class="hint"><b>${tipOf(e) === 'part' ? 'Part' : 'Tam'}</b> personel · aylık limit <b>${fmtH(limitOf(e))}</b> saat. Hedef = limit − (izin/rapor + resmi kapalı gün) × ${fmtH(S.gunSaat)} saat.</p>
+      <label>Resmi kapalı gün (bayram vb.; herkese uygulanır)<input id="aAll" inputmode="decimal" placeholder="0" value="${ctx.gunAll || ''}"></label>
+      <label>Bu kişi için rapor / yıllık izin günü<input id="aGun" inputmode="decimal" placeholder="0" value="${a.gun || ''}"></label>
+      <label>Hedefi elle yaz (boşsa otomatik)<input id="aHed" inputmode="decimal" placeholder="otomatik" value="${typeof a.hedef === 'number' ? fmtH(a.hedef) : ''}"></label>
+      <p class="mtot">Hedef <b id="aTarget">–</b> · Çalışılan <b>${fmtH(done)}</b> · Kalan <b id="aKal">–</b></p>
+      <div class="rowbtn"><button type="button" class="btn light" id="aClose">Kapat</button><button type="button" class="btn" id="aSave">Kaydet</button></div></form>`;
+    const calc = () => { const all = numG($('#aAll').value || '0') ?? 0, gun = numG($('#aGun').value || '0') ?? 0, hs = $('#aHed').value.trim(), hed = hs === '' ? null : numH(hs);
+      const t = hed ?? Math.max(0, limitOf(e) - (gun + all) * S.gunSaat); $('#aTarget').textContent = fmtH(t); $('#aKal').textContent = fmtH(t - done); return { all, gun, hed }; };
+    ['#aAll', '#aGun', '#aHed'].forEach(i => $(i).oninput = calc); calc();
+    $('#aClose').onclick = () => dlg.close();
+    $('#aSave').onclick = async ev => {
+      const bad = [['#aAll', numG], ['#aGun', numG], ['#aHed', numH]].some(([i, f]) => $(i).value.trim() !== '' && f($(i).value) === null);
+      if (bad) return toast('Değerler geçerli bir sayı olmalı.');
+      const { all, gun, hed } = calc(); ev.target.disabled = true;
+      try {
+        const id = `${ctx.M}_${p.sicil}`;
+        if (gun || hed !== null) { const x = { month: ctx.M, sicil: p.sicil, magaza: e.magaza || '', gun, ...(hed !== null ? { hedef: hed } : {}) }; await setDoc(doc(db, 'aylik', id), x); ctx.aylik.set(p.sicil, x); }
+        else { await deleteDoc(doc(db, 'aylik', id)); ctx.aylik.delete(p.sicil); }
+        if (all !== ctx.gunAll) { if (all) await setDoc(doc(db, 'aylik', `${ctx.M}_ALL`), { month: ctx.M, sicil: 'ALL', magaza: '', gun: all }); else await deleteDoc(doc(db, 'aylik', `${ctx.M}_ALL`)); ctx.gunAll = all; }
+        out.querySelectorAll('tbody tr[data-r]').forEach(updTot); dlg.close(); toast('Aylık düzeltme kaydedildi.');
+      } catch (err) { toast('Kaydedilemedi: ' + err.message); } finally { ev.target.disabled = false; }
+    };
+    dlg.showModal();
+  }
   function openMesai(ri) {
     const p = list[ri], tr = out.querySelector(`tbody tr[data-r="${ri}"]`), vals = cellVals(tr), od = ovs.get(p.sicil)?.d || {};
     let dlg = $('#dlgMesai'); if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'dlgMesai'; document.body.appendChild(dlg); }
@@ -684,43 +754,6 @@ async function exportWeekXlsx() {
     X.writeFile(wb, `vardiya-${ws}.xlsx`);
   } catch (e) { toast('İndirilemedi: ' + e.message); }
 }
-/* --- Vardiya görselleri (Firestore'da küçültülmüş JPEG olarak; Storage ücretli olduğu için) --- */
-async function compressImage(file) {
-  const img = await imgFromFile(file); let maxW = 1800;
-  for (let i = 0; i < 6; i++) {
-    const k = Math.min(1, maxW / img.width), cv = document.createElement('canvas');
-    cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
-    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-    for (const q of [0.82, 0.7, 0.58]) { const url = cv.toDataURL('image/jpeg', q); if (url.length <= 760000) return { url, w: cv.width, h: cv.height }; }
-    maxW = Math.round(maxW * 0.8);
-  }
-  throw new Error('Görsel çok büyük, daha küçük bir görüntü deneyin.');
-}
-async function publishImage(file, weekStart) {
-  const ws = mondayOf(weekStart), { url, w, h } = await compressImage(file);
-  await setDoc(doc(db, 'shiftImages', imgId(ws)), { weekStart: ws, store: scope(), data: url, w, h, createdAt: serverTimestamp(), by: me?.ad || '' });
-  return ws;
-}
-async function loadImgList() {
-  const el = $('#imgList'); if (!el) return;
-  try {
-    const sc = scope();
-    const snap0 = await getDocs(sc ? query(collection(db, 'shiftImages'), where('store', '==', sc)) : query(collection(db, 'shiftImages'), orderBy('weekStart', 'desc'), limit(40)));
-    if (!el.isConnected) return;
-    const snap = { docs: snap0.docs.filter(d => (d.data().store || '') === sc).sort((a, b) => b.data().weekStart.localeCompare(a.data().weekStart)).slice(0, 8) }; snap.empty = !snap.docs.length;
-    el.innerHTML = snap.empty ? '<p class="empty">Henüz görsel yüklenmedi.</p>' : snap.docs.map(d => { const x = d.data(); return `<figure>
-      <img src="${x.data}" alt="" data-view="${esc(d.id)}"><figcaption><b>${fmtDate(x.weekStart).slice(0, 5)} – ${fmtDate(addDays(x.weekStart, 6)).slice(0, 5)}</b>
-      <button class="btn danger small" data-delimg="${esc(d.id)}">Sil</button></figcaption></figure>`; }).join('');
-    el.onclick = async ev => {
-      const v = ev.target.dataset.view, dl = ev.target.dataset.delimg;
-      if (v) openImg(ev.target.src);
-      if (dl && confirm('Bu haftanın görseli silinsin mi?')) { await deleteDoc(doc(db, 'shiftImages', dl)).catch(x => toast(x.message)); loadImgList(); if (dl === imgId(mondayOf(selDate))) watchWeek(); }
-    };
-  } catch (e) { el.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
-}
-
-const imgFromFile = f => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Görsel açılamadı')); i.src = URL.createObjectURL(f); });
-
 /* --- Çalışanlar --- */
 function tabCalisan(b) {
   b.innerHTML = `
@@ -790,15 +823,19 @@ function renderEmpList() {
   const keys = ['', ...Object.keys(STORES), ...[...groups.keys()].filter(k => k && !(k in STORES))].filter(k => groups.has(k));
   const rowH = e => `<tr><td>${esc(e.sicil)}</td><td>${roleTag(e.sicil)}${esc(e.ad)}${e.isAdmin ? ' <span class="tag">yönetici</span>' : ''}</td><td>${rsel(e)}</td>
     <td><input class="sira-in" type="number" min="0" max="99" value="${metaMap.get(e.sicil)?.s ?? 99}" data-sira="${esc(e.sicil)}"></td><td>${esc(e.telefon)}</td>
+    <td><select data-tip="${esc(e.sicil)}"><option value="tam"${tipOf(e) === 'tam' ? ' selected' : ''}>Tam</option><option value="part"${tipOf(e) === 'part' ? ' selected' : ''}>Part</option></select></td>
+    <td><input class="sira-in" type="text" inputmode="decimal" data-lim="${esc(e.sicil)}" placeholder="${fmtH(tipOf(e) === 'part' ? S.partAy : S.tamAy)}" value="${typeof e.limit === 'number' ? fmtH(e.limit) : ''}" title="Aylık saat limiti (boş = varsayılan)"></td>
     <td>${e.telegramChatId ? '<span class="tag ok">bağlı</span>' : '<span class="tag">yok</span>'}</td>
     <td><input type="checkbox" data-nt="${esc(e.sicil)}" ${e.notify ? 'checked' : ''} style="width:auto" title="Eksik giriş/çıkış uyarısı alsın"></td>
     <td><button class="btn light small" data-ed="${esc(e.sicil)}">Düzenle</button> <button class="btn danger small" data-del="${esc(e.sicil)}">Sil</button></td></tr>`;
-  el.innerHTML = `<table><tr><th>Sicil</th><th>Ad</th><th>Rol</th><th>Sıra</th><th>Telefon</th><th>Bot</th><th>Uyarı</th><th></th></tr>${
-    keys.map(k => `<tr class="grp"><td colspan="8">${k ? esc(storeName(k)) : 'Atatürk Cd. (mevcut ekip)'} · ${groups.get(k).length} kişi</td></tr>` + groups.get(k).map(rowH).join('')).join('')}</table>`;
+  el.innerHTML = `<table><tr><th>Sicil</th><th>Ad</th><th>Rol</th><th>Sıra</th><th>Telefon</th><th>Tip</th><th>Aylık limit</th><th>Bot</th><th>Uyarı</th><th></th></tr>${
+    keys.map(k => `<tr class="grp"><td colspan="10">${k ? esc(storeName(k)) : 'Atatürk Cd. (mevcut ekip)'} · ${groups.get(k).length} kişi</td></tr>` + groups.get(k).map(rowH).join('')).join('')}</table>`;
   el.onchange = async ev => {
     const t = ev.target;
     if (t.dataset.rol) await updateDoc(doc(db, 'employees', t.dataset.rol), { rol: t.value }).catch(x => toast(x.message));
     if (t.dataset.nt) await updateDoc(doc(db, 'employees', t.dataset.nt), { notify: t.checked }).catch(x => toast(x.message));
+    if (t.dataset.tip) await updateDoc(doc(db, 'employees', t.dataset.tip), { tip: t.value }).catch(x => toast(x.message));
+    if (t.dataset.lim) { const v = t.value.trim() === '' ? null : numH(t.value); if (t.value.trim() !== '' && (v === null || v <= 0)) return toast('Geçerli bir saat girin (örn. 100).'); await updateDoc(doc(db, 'employees', t.dataset.lim), { limit: v }).catch(x => toast(x.message)); }
     if (t.dataset.sira) await updateDoc(doc(db, 'employees', t.dataset.sira), { sira: Math.max(0, Math.min(99, +t.value || 0)) }).catch(x => toast(x.message));
   };
   el.onclick = async ev => {
@@ -889,11 +926,18 @@ function tabAyar(b) {
       <label>…mola (saat)<input type="number" id="m2" step="0.25" min="0" max="5" value="${S.mola2}"></label>
       <label>Daha uzun vardiyalarda mola (saat)<input type="number" id="m3" step="0.25" min="0" max="5" value="${S.mola3}"></label>
       <p class="hint">Örnek (varsayılan): 16.45–21.15 → brüt 4,5, mola 0,5, mesai 4. 13.15–21.15 → brüt 8, mola 1, mesai 7. 11.15–21.15 → brüt 10, mola 1,5, mesai 8,5. Mola kuralları anında geçerlidir.</p>
+      <h3 class="sub">Aylık saat hedefi</h3>
+      <label>Tam personel aylık saat<input type="number" id="t1" step="0.5" min="0" max="400" value="${S.tamAy}"></label>
+      <label>Part personel en çok (saat)<input type="number" id="t2" step="0.5" min="0" max="400" value="${S.partAy}"></label>
+      <label>İzin/rapor/resmi kapalı gün başına düşülen saat<input type="number" id="t3" step="0.25" min="0" max="24" value="${S.gunSaat}"></label>
+      <label>Hesap başlangıç ayı<input type="month" id="t4" value="${esc(S.sayacBas)}"></label>
+      <p class="hint">Part personelin limitini kişi bazında Çalışanlar sekmesinden düşürebilirsiniz. Varsayılan part: Kübra, Selçuk, Gönül; diğer herkes tam.</p>
       <button class="btn">Kaydet</button></form></div>`;
   $('#frmSet').onsubmit = async e => {
     e.preventDefault();
     S = { girisOnce: +$('#s1').value, girisSonra: +$('#s2').value, cikisOnce: +$('#s3').value, cikisSonra: +$('#s4').value, aralik: +$('#s5').value,
-      mola1Es: +$('#m1e').value, mola1: +$('#m1').value, mola2Es: +$('#m2e').value, mola2: +$('#m2').value, mola3: +$('#m3').value };
+      mola1Es: +$('#m1e').value, mola1: +$('#m1').value, mola2Es: +$('#m2e').value, mola2: +$('#m2').value, mola3: +$('#m3').value,
+      tamAy: +$('#t1').value, partAy: +$('#t2').value, gunSaat: +$('#t3').value, sayacBas: $('#t4').value || DEF.sayacBas };
     try { await setDoc(doc(db, 'settings', 'main'), S); toast('Ayarlar kaydedildi.'); } catch (err) { toast(err.message); }
   };
 }

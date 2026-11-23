@@ -79,6 +79,11 @@ service cloud.firestore {
       allow delete: if isStoreAdmin() && resource.data.magaza == store();
     }
 
+    // Aylık saat düzeltmeleri (izin/rapor/resmi kapalı gün, elle hedef): yalnızca genel yönetici
+    match /aylik/{id} {
+      allow read, write: if isAdmin();
+    }
+
     // Çevrimiçi sayacı: cihaz başına tek belge {ms: son nabız zamanı}; kimlik/ad içermez
     match /presence/{id} {
       allow read: if true;
