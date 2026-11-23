@@ -133,10 +133,14 @@ function renderHello() {
 }
 
 /* ---------- Haftalık vardiya (canlı): vardiya kaydedildikçe otomatik güncellenir; geçmiş/gelecek haftalar gezilebilir ---------- */
-let wkStart = mondayOf(todayStr()), wkUnsubs = [], wkAtt = [], wkOff = [];
+let wkStart = mondayOf(todayStr()), wkUnsubs = [], wkAtt = [], wkOff = [], wkImg = null, wkImgSeq = 0;
+const imgId = ws => scope() ? `${scope()}_${ws}` : ws;
+function openImg(src) { $('#imgBig').src = src; $('#dlgImg').showModal(); }
 function watchWk() {
-  wkUnsubs.forEach(u => u?.()); wkUnsubs = []; wkAtt = []; wkOff = [];
+  wkUnsubs.forEach(u => u?.()); wkUnsubs = []; wkAtt = []; wkOff = []; wkImg = null;
   if (authorized()) {
+    const seq = ++wkImgSeq;
+    getDoc(doc(db, 'shiftImages', imgId(wkStart))).then(d => { if (seq === wkImgSeq && d.exists()) { wkImg = d.data(); renderWeek(); } }).catch(() => { });
     const dates = [...Array(7)].map((_, i) => addDays(wkStart, i)), sc = scope();
     const mk = (coll, set, strict) => wkUnsubs.push(onSnapshot(query(collection(db, coll), where('date', 'in', dates), ...(strict && sc ? [where('magaza', '==', sc)] : [])),
       snap => { set(snap.docs.map(d => d.data()).filter(inScope)); renderWeek(); },
@@ -161,9 +165,9 @@ function renderWeek() {
     <button class="btn light small" data-wk="1" aria-label="Sonraki hafta">›</button>${ws === mondayOf(td) ? '' : '<button class="btn light small" data-wk="0">Bu hafta</button>'}</div></div>
     ${list.length ? `<div class="tw wkt"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th class="${dates[i] === td ? 'today' : ''}">${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
       list.map(p => `<tr class="${p.sicil === mineSc ? 'me' : ''}"><td class="wn1">${esc(p.ad)}</td>${dates.map(d => cell(p.c[d])).join('')}</tr>`).join('')}</tbody></table></div>`
-      : '<p class="empty">Bu hafta için vardiya girilmemiş.</p>'}
+      : wkImg ? `<img class="weekimg" src="${wkImg.data}" alt="Arşiv: haftalık vardiya"><p class="hint">Arşiv görseli. Büyütmek için dokunun.</p>` : '<p class="empty">Bu hafta için vardiya girilmemiş.</p>'}
     <p class="hint">Vardiya kaydedildiğinde otomatik güncellenir. Geçmiş ve gelecek haftalar için okları kullanın.</p>`;
-  el.onclick = ev => { const b = ev.target.closest('[data-wk]'); if (!b) return; const k = +b.dataset.wk; wkStart = k === 0 ? mondayOf(todayStr()) : addDays(wkStart, 7 * k); watchWk(); };
+  el.onclick = ev => { if (ev.target.classList.contains('weekimg')) return openImg(ev.target.src); const b = ev.target.closest('[data-wk]'); if (!b) return; const k = +b.dataset.wk; wkStart = k === 0 ? mondayOf(todayStr()) : addDays(wkStart, 7 * k); watchWk(); };
 }
 
 function people() {
