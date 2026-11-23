@@ -159,7 +159,7 @@ function renderWeek() {
   const list = [...per.values()].sort(cmpPeople), t = x => x.replace(':', '.');
   const cell = c => c && (c.giris || c.cikis)
     ? `<td class="wc${c.giris === SABAH_GIRIS && c.cikis === '21:15' ? ' full' : ''}"><span>${c.giris ? t(c.giris) : '–'}</span><span>${c.cikis ? t(c.cikis) : '–'}</span></td>`
-    : c?.off ? '<td class="wc wb">B</td>' : '<td class="wc wn">·</td>';
+    : '<td class="wc wb">B</td>';                                            // vardiyası olmayan gün = izin (editördeki gibi)
   el.innerHTML = `<div class="wkhead"><h2>Haftalık Vardiya${scope() ? ' · ' + esc(storeName(scope())) : ''}</h2>
     <div class="wknav"><button class="btn light small" data-wk="-1" aria-label="Önceki hafta">‹</button><b>${fmtDate(ws).slice(0, 5)} – ${fmtDate(addDays(ws, 6)).slice(0, 5)}</b>
     <button class="btn light small" data-wk="1" aria-label="Sonraki hafta">›</button>${ws === mondayOf(td) ? '' : '<button class="btn light small" data-wk="0">Bu hafta</button>'}</div></div>
