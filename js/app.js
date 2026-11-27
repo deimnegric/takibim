@@ -133,13 +133,14 @@ function renderHello() {
 }
 
 /* ---------- Haftalık vardiya (canlı): vardiya kaydedildikçe otomatik güncellenir; geçmiş/gelecek haftalar gezilebilir ---------- */
-let wkStart = mondayOf(todayStr()), wkUnsubs = [], wkAtt = [], wkOff = [], wkImg = null, wkImgSeq = 0;
+let wkStart = mondayOf(todayStr()), wkUnsubs = [], wkAtt = [], wkOff = [], wkImg = null, wkImgSeq = 0, wkPrev = null;
 const imgId = ws => scope() ? `${scope()}_${ws}` : ws;
 function openImg(src) { $('#imgBig').src = src; $('#dlgImg').showModal(); }
 function watchWk() {
-  wkUnsubs.forEach(u => u?.()); wkUnsubs = []; wkAtt = []; wkOff = []; wkImg = null;
+  wkUnsubs.forEach(u => u?.()); wkUnsubs = []; wkAtt = []; wkOff = []; wkImg = null; wkPrev = null;
   if (authorized()) {
     const seq = ++wkImgSeq;
+    loadAtt(wkStart).then(a => { if (seq === wkImgSeq && a) { wkPrev = a; renderWeek(); } });
     getDoc(doc(db, 'shiftImages', imgId(wkStart))).then(d => { if (seq === wkImgSeq && d.exists()) { wkImg = d.data(); renderWeek(); } }).catch(() => { });
     const dates = [...Array(7)].map((_, i) => addDays(wkStart, i)), sc = scope();
     const mk = (coll, set, strict) => wkUnsubs.push(onSnapshot(query(collection(db, coll), where('date', 'in', dates), ...(strict && sc ? [where('magaza', '==', sc)] : [])),
@@ -157,14 +158,16 @@ function renderWeek() {
   for (const r of wkAtt) { const c = (P(r).c[r.date] ??= {}); c[r.type] = r.planned; }
   for (const r of wkOff) { const c = (P(r).c[r.date] ??= {}); c.off = true; }
   const list = [...per.values()].sort(cmpPeople), t = x => x.replace(':', '.');
+  let bn = 0;
   const cell = c => c && (c.giris || c.cikis)
     ? `<td class="wc${c.giris === SABAH_GIRIS && c.cikis === '21:15' ? ' full' : ''}"><span>${c.giris ? t(c.giris) : '–'}</span><span>${c.cikis ? t(c.cikis) : '–'}</span></td>`
-    : '<td class="wc wb">B</td>';                                            // vardiyası olmayan gün = izin (editördeki gibi)
+    : `<td class="wc wb">B${bn || ''}</td>`;                                 // vardiyası olmayan gün = izin (editördeki gibi); ay içi sıra: B1, B2…
   el.innerHTML = `<div class="wkhead"><h2>Haftalık Vardiya${scope() ? ' · ' + esc(storeName(scope())) : ''}</h2>
     <div class="wknav"><button class="btn light small" data-wk="-1" aria-label="Önceki hafta">‹</button><b>${fmtDate(ws).slice(0, 5)} – ${fmtDate(addDays(ws, 6)).slice(0, 5)}</b>
     <button class="btn light small" data-wk="1" aria-label="Sonraki hafta">›</button>${ws === mondayOf(td) ? '' : '<button class="btn light small" data-wk="0">Bu hafta</button>'}</div></div>
     ${list.length ? `<div class="tw wkt"><table><thead><tr><th>Çalışan</th>${DN.map((d, i) => `<th class="${dates[i] === td ? 'today' : ''}">${d}<br><small>${fmtDate(dates[i]).slice(0, 5)}</small></th>`).join('')}</tr></thead><tbody>${
-      list.map(p => `<tr class="${p.sicil === mineSc ? 'me' : ''}"><td class="wn1">${esc(p.ad)}</td>${dates.map(d => cell(p.c[d])).join('')}</tr>`).join('')}</tbody></table></div>`
+      list.map(p => { const cnt = {}; return `<tr class="${p.sicil === mineSc ? 'me' : ''}"><td class="wn1">${esc(p.ad)}</td>${dates.map(d => { const m = d.slice(0, 7), c = p.c[d], isB = !(c && (c.giris || c.cikis));
+        cnt[m] ??= m === dates[0].slice(0, 7) && wkPrev ? bBase(wkPrev, p.sicil, ws) : 0; if (isB) cnt[m]++; bn = isB && wkPrev ? cnt[m] : 0; return cell(c); }).join('')}</tr>`; }).join('')}</tbody></table></div>`
       : wkImg ? `<img class="weekimg" src="${wkImg.data}" alt="Arşiv: haftalık vardiya"><p class="hint">Arşiv görseli. Büyütmek için dokunun.</p>` : '<p class="empty">Bu hafta için vardiya girilmemiş.</p>'}
     <p class="hint">Vardiya kaydedildiğinde otomatik güncellenir. Geçmiş ve gelecek haftalar için okları kullanın.</p>`;
   el.onclick = ev => { if (ev.target.classList.contains('weekimg')) return openImg(ev.target.src); const b = ev.target.closest('[data-wk]'); if (!b) return; const k = +b.dataset.wk; wkStart = k === 0 ? mondayOf(todayStr()) : addDays(wkStart, 7 * k); watchWk(); };
@@ -450,6 +453,7 @@ async function saveShifts(list, offs = []) {
     ops.slice(i, i + 400).forEach(([ref, data]) => data === null ? b.delete(ref) : b.set(ref, data, { merge: true }));
     await b.commit();
   }
+  attCache.clear();
   const today = todayStr();
   selDate = dates.includes(today) ? today : dates.sort()[0];
   $('#selDate').value = selDate; watchRows();
@@ -502,7 +506,7 @@ async function loadEditor() {
     snap.forEach(d => { const r = d.data(); if (!inScope(r)) return; let p = m.get(r.sicil); if (!p) { p = { sicil: r.sicil, ad: r.ad, cells: Array(7).fill(null) }; m.set(r.sicil, p); }
       const i = dates.indexOf(r.date); p.cells[i] ??= {}; p.cells[i][r.type] = r.planned; });
     const list = [...m.values()].sort(cmpPeople);
-    renderEditor(ws, dates, list, await loadMesai(ws), await loadMonthCtx(ws));
+    renderEditor(ws, dates, list, await loadMesai(ws), await loadMonthCtx(ws), await loadAtt(ws));
   } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 const cellTxt = c => !c ? 'B' : `${c.giris || ''}-${c.cikis || ''}`;
@@ -526,16 +530,39 @@ const monthLabel = m => `${MONTHS[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}`;
 const showKal = () => { try { return localStorage.getItem('takip_kalan') !== '0'; } catch { return true; } };
 const setKal = v => { try { localStorage.setItem('takip_kalan', v ? '1' : '0'); } catch { } };
 const numG = s => { const x = parseFloat(String(s).replace(',', '.')); return isFinite(x) && x >= 0 && x <= 31 ? x : null; };
+/* Ayın başından bu haftaya kadarki vardiya kayıtları (aylık toplam ve B numaralandırma için). Cache: kayıttan sonra temizlenir. */
+const attCache = new Map();
+const monthEnd = M => `${M}-${pad(new Date(+M.slice(0, 4), +M.slice(5, 7), 0).getDate())}`;
+async function loadAtt(ws) {                                                  // -> Map sicil -> Map tarih -> {giris, cikis}  (hata: null)
+  const m0 = ws.slice(0, 7) + '-01', from = mondayOf(m0), sc = me?.magaza || '', key = `${from}|${ws}|${sc}`;
+  if (m0 >= ws) return new Map();
+  if (attCache.has(key)) return attCache.get(key);
+  const pr = (async () => {
+    try {
+      const out = new Map();
+      (await getDocs(query(collection(db, 'attendance'), where('date', '>=', from), where('date', '<', ws), ...(sc ? [where('magaza', '==', sc)] : [])))).forEach(d => {
+        const r = d.data(); if (!inScope(r)) return; const pm = out.get(r.sicil) || new Map(); out.set(r.sicil, pm);
+        const c = pm.get(r.date) || {}; c[r.type] = r.planned; pm.set(r.date, c); });
+      return out;
+    } catch { return null; }
+  })();
+  attCache.set(key, pr); return pr;
+}
+function bBase(att, sc, ws) {                                                 // ayın başından ws'ye kadar kişinin B (izin) günü sayısı
+  const pm = att?.get(sc); if (!pm) return 0;
+  const m0 = ws.slice(0, 7) + '-01', wks = new Set([...pm.keys()].map(mondayOf)); let n = 0;
+  for (let d = m0; d < ws; d = addDays(d, 1)) if (wks.has(mondayOf(d)) && !pm.has(d)) n++;
+  return n;
+}
 async function loadMonthCtx(ws) {                                              // yalnızca genel yönetici: ayın önceki haftalarındaki çalışılan saat + aylık düzeltmeler
   if (!me || me.magaza) return null;
-  const M = addDays(ws, 6).slice(0, 7); if (M < S.sayacBas) return null;
-  const mStart = M + '-01', ctx = { M, prev: new Map(), aylik: new Map(), gunAll: 0 };
+  const M = addDays(ws, 3).slice(0, 7); if (M < S.sayacBas) return null;      // hafta, günlerinin çoğunun düştüğü aya sayılır (Per günü); ay sonuna kadar o aya düşer
+  const mStart = M + '-01', ctx = { M, mStart, mEnd: monthEnd(M), prev: new Map(), aylik: new Map(), gunAll: 0 };
   try {
     if (mStart < ws) {
-      const per = new Map(), ovd = new Map();
-      (await getDocs(query(collection(db, 'attendance'), where('date', '>=', mStart), where('date', '<', ws)))).forEach(d => { const r = d.data(); if (!inScope(r)) return; const k = r.sicil + '|' + r.date; const c = per.get(k) || {}; c[r.type] = r.planned; per.set(k, c); });
+      const ovd = new Map(), att = await loadAtt(ws); if (!att) throw new Error('Önceki haftalar okunamadı');
       (await getDocs(query(collection(db, 'mesai'), where('week', '>=', mondayOf(mStart)), where('week', '<', ws)))).forEach(d => { const x = d.data(); ovd.set(x.sicil, { ...(ovd.get(x.sicil) || {}), ...x.d }); });
-      for (const [k, c] of per) { const [sc, date] = k.split('|'); if (date < mStart) continue; const v = c.giris && c.cikis ? `${c.giris}-${c.cikis}` : '', a = autoNet(v), o = ovd.get(sc)?.[date];
+      for (const [sc, pm] of att) for (const [date, c] of pm) { if (date < mStart) continue; const v = c.giris && c.cikis ? `${c.giris}-${c.cikis}` : '', a = autoNet(v), o = ovd.get(sc)?.[date];
         if (a !== null) ctx.prev.set(sc, (ctx.prev.get(sc) || 0) + (o && o.p === v && typeof o.h === 'number' ? o.h : a)); }
     }
     (await getDocs(query(collection(db, 'aylik'), where('month', '==', M)))).forEach(d => { const x = d.data(); if (x.sicil === 'ALL') ctx.gunAll = +x.gun || 0; else ctx.aylik.set(x.sicil, x); });
@@ -560,7 +587,7 @@ async function loadMesai(ws) {                                               // 
 }
 
 /* --- Saat hücresi: üstte giriş, altta çıkış (xx.xx); 2 hane yazınca sonraki kutuya geçer; üstte hazır vardiya butonları --- */
-const QUICK = [['08.45-16.45', '08:45-16:45'], ['11.15-21.15', '11:15-21:15'], ['14.15-21.15', '14:15-21:15']];
+const QUICK = [['08.45-16.45', '08:45-16:45'], ['08.45-21.15', '08:45-21:15'], ['11.15-21.15', '11:15-21:15'], ['14.15-21.15', '14:15-21:15']];
 const tFields = v => { const m = String(v ?? '').match(/(\d{1,2})[:.](\d{2})\s*[-–—]\s*(?:(\d{1,2})[:.](\d{2}))?/);
   return m ? [pad(m[1]), m[2], m[3] != null ? pad(m[3]) : '', m[4] || ''] : ['', '', '', '']; };
 const tJoin = f => { const l = f[0] || f[1] ? `${f[0]}:${f[1]}` : '', r = f[2] || f[3] ? `${f[2]}:${f[3]}` : ''; return l || r ? `${l}-${r}` : ''; };
@@ -599,18 +626,18 @@ function wireTime(box) {
   });
   box.addEventListener('mousedown', e => { if (e.target.closest('.qbtn')) e.preventDefault(); });   // klavye kapanmasın
   box.addEventListener('click', e => {
-    const bm = e.target.closest('.bmark'); if (bm) { const w = bm.closest('.tcw'); w.classList.remove('isb'); focusAt(w.querySelector('.tp')); return; }
+    const bm = e.target.closest('.bmark'); if (bm) { const w = bm.closest('.tcw'); w.classList.remove('isb'); w.querySelector('.cell').dispatchEvent(new Event('input')); focusAt(w.querySelector('.tp')); return; }
     const b = e.target.closest('.qbtn'); if (!b) return;
     const w = box._active; if (!w || !w.isConnected) return toast('Önce bir saat hücresine dokunun.');
     const f = tFields(b.dataset.q);
     w.querySelectorAll('.tp').forEach((x, i) => { x.value = f[i]; }); sync(w);
-    if (!b.dataset.q) w.classList.add('isb');                                                    // izin: hücrede yalnızca B görünür
+    if (!b.dataset.q) { w.classList.add('isb'); w.querySelector('.cell').dispatchEvent(new Event('input')); }   // izin: hücrede yalnızca B görünür (B1, B2…)
     const a = [...box.querySelectorAll('.tcw')]; focusAt(a[a.indexOf(w) + 1]?.querySelector('.tp'));   // sonraki güne geç
   });
 }
 
 
-function renderEditor(ws, dates, list, ovs = new Map(), ctx = null) {
+function renderEditor(ws, dates, list, ovs = new Map(), ctx = null, att = null) {
   const out = $('#edOut'), DN = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
   list.forEach(p => { p.orig ??= p.cells.map(cellTxt); });          // ilk yüklenen değerler sabit kalsın (değişiklik tespiti için)
   const addable = () => employees.filter(e => !list.some(p => p.sicil === e.sicil) && e.aktif !== false && (e.magaza || '') === scope());
@@ -640,18 +667,25 @@ function renderEditor(ws, dates, list, ovs = new Map(), ctx = null) {
   };
   const cellVals = tr => [...tr.querySelectorAll('.cell')].map(c => c.value.trim());
   const updTot = tr => { if (!tr) return; const p = list[+tr.dataset.r], t = weekSum(cellVals(tr), dates, ovs.get(p.sicil)), b = tr.querySelector('.totbtn');
-    b.querySelector('b').textContent = t.n ? fmtH(t.sum) : '–'; b.classList.toggle('man', t.man);
+    const vs = cellVals(tr), sp = dates.findIndex(d => d.slice(0, 7) !== dates[0].slice(0, 7));          // hafta iki aya yayılıyorsa "önceki ay / bu ay" göster
+    if (sp > 0 && t.n) { const a1 = weekSum(vs.map((v, i) => i < sp ? v : ''), dates, ovs.get(p.sicil)), a2 = weekSum(vs.map((v, i) => i >= sp ? v : ''), dates, ovs.get(p.sicil));
+      b.querySelector('b').textContent = `${fmtH(a1.sum)}/${fmtH(a2.sum)}`; b.title = `Hafta toplamı ${fmtH(t.sum)} saat — ay sonuna göre bölünmüş. Mola ve süreleri göstermek için dokunun`; }
+    else { b.querySelector('b').textContent = t.n ? fmtH(t.sum) : '–'; b.title = 'Mola ve süreleri göster / elle düzelt'; }
+    b.classList.toggle('man', t.man);
+    if (att !== null) { const cnt = {}, w = [...tr.querySelectorAll('.tcw')];                          // B1, B2…: ay içindeki izin sırası
+      w.forEach((x, i) => { const m = dates[i].slice(0, 7); cnt[m] ??= m === dates[0].slice(0, 7) ? bBase(att, p.sicil, ws) : 0;
+        const bm = x.querySelector('.bmark'); if (x.classList.contains('isb') && !x.querySelector('.cell').value) bm.textContent = 'B' + (++cnt[m]); else bm.textContent = 'B'; }); }
     const kb = tr.querySelector('.kalan'), k = kalanOf(p.sicil, cellVals(tr)); if (!kb) return;
     kb.hidden = k === null || !showKal(); if (k !== null) { kb.textContent = fmtH(k); kb.classList.toggle('neg', k < 0); } };
   const kalanOf = (sc, vals) => {
     if (!ctx || ctx.err) return null; const e = employees.find(x => x.sicil === sc); if (!e) return null;
-    const mStart = ctx.M + '-01', sub = weekSum(vals.map((v, i) => dates[i] >= mStart ? v : ''), dates, ovs.get(sc));
+    const sub = weekSum(vals.map((v, i) => dates[i] >= ctx.mStart && dates[i] <= ctx.mEnd ? v : ''), dates, ovs.get(sc));
     return targetOf(e, ctx) - ((ctx.prev.get(sc) || 0) + sub.sum);
   };
   function openAylik(ri) {
     const p = list[ri], e = employees.find(x => x.sicil === p.sicil), tr = out.querySelector(`tbody tr[data-r="${ri}"]`); if (!e || !ctx) return;
-    const a = ctx.aylik.get(p.sicil) || {}, mStart = ctx.M + '-01', vals = cellVals(tr);
-    const done = (ctx.prev.get(p.sicil) || 0) + weekSum(vals.map((v, i) => dates[i] >= mStart ? v : ''), dates, ovs.get(p.sicil)).sum;
+    const a = ctx.aylik.get(p.sicil) || {}, vals = cellVals(tr);
+    const done = (ctx.prev.get(p.sicil) || 0) + weekSum(vals.map((v, i) => dates[i] >= ctx.mStart && dates[i] <= ctx.mEnd ? v : ''), dates, ovs.get(p.sicil)).sum;
     let dlg = $('#dlgAylik'); if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'dlgAylik'; document.body.appendChild(dlg); }
     dlg.innerHTML = `<form method="dialog" class="mesai" onsubmit="return false"><h2>${esc(p.ad)} · ${monthLabel(ctx.M)}</h2>
       <p class="hint"><b>${tipOf(e) === 'part' ? 'Part' : 'Tam'}</b> personel · aylık limit <b>${fmtH(limitOf(e))}</b> saat. Hedef = limit − (izin/rapor + resmi kapalı gün) × ${fmtH(S.gunSaat)} saat.</p>
